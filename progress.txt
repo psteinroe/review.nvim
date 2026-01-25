@@ -140,9 +140,17 @@
 - [x] tests/unit/test_ai.lua - AI tests (51 tests passing)
 - [x] All 918 tests passing (915 pass, 3 pre-existing failures)
 
+### Completed This Session (continued 23)
+- [x] tests/integration/test_ai_export.lua - AI export integration tests (31 tests)
+- [x] Tests cover: local review workflow, PR review workflow, prompt options, custom instructions
+- [x] Tests cover: comment type labels, file location formatting, clipboard export, edge cases
+- [x] All 949 tests passing (946 pass, 3 pre-existing failures)
+
 ### Next Steps
-- Phase 7: AI Integration (continued)
-  38. tests/integration/test_ai_export.lua - AI prompt generation test
+- Phase 8: Polish
+  39. Documentation (README, help docs)
+  40. tests/ui/test_signs.lua - Signs tests (if not done)
+  41. Final integration testing and bug fixes
 
 ### Issues/Blockers
 - None
