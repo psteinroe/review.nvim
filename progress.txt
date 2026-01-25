@@ -75,9 +75,13 @@
 - [x] tests/unit/test_virtual_text.lua - Virtual text tests (59 tests passing)
 - [x] Added virtual_text config to lua/review/config.lua (enabled, max_length, position)
 
+### Completed This Session (continued 12)
+- [x] lua/review/ui/float.lua - Floating window helpers (create, show_comment, input, multiline_input, confirm, notify, menu, etc.)
+- [x] tests/unit/test_float.lua - Float tests (59 tests passing)
+
 ### Next Steps
-- Phase 3: Basic UI (continued)
-  19. Create ui/float.lua - Floating window helpers
+- Phase 5: Navigation + Commands
+  26. Create core/navigation.lua - All navigation
 
 ### Issues/Blockers
 - None
