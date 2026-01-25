@@ -124,9 +124,16 @@
 - [x] tests/unit/test_panel.lua - Panel tests (47 tests passing)
 - [x] All 837 tests passing (834 pass, 3 pre-existing failures)
 
+### Completed This Session (continued 21)
+- [x] lua/review/ui/picker.lua - PR picker (vim.ui.select integration)
+- [x] Features: review_requests, open_prs, my_prs, search, input_pr_number, pick (menu)
+- [x] Format functions for basic and detailed PR display
+- [x] tests/unit/test_picker.lua - Picker tests (30 tests passing)
+- [x] All 867 tests passing (864 pass, 3 pre-existing failures)
+
 ### Next Steps
-- Phase 6: GitHub Integration (continued)
-  35. lua/review/ui/picker.lua - PR picker
+- Phase 7: AI Integration
+  37. lua/review/integrations/ai.lua - CLI-based AI providers
 
 ### Issues/Blockers
 - None
