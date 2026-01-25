@@ -87,9 +87,13 @@
 - [x] lua/review/commands.lua - User commands (:Review, :ReviewAI, :ReviewComment)
 - [x] tests/unit/test_commands.lua - Commands tests (40 tests passing)
 
+### Completed This Session (continued 15)
+- [x] lua/review/keymaps.lua - Keymap setup (all keybindings, setup/teardown, buffer-local keymaps)
+- [x] tests/unit/test_keymaps.lua - Keymaps tests (32 tests passing)
+
 ### Next Steps
 - Phase 5: Navigation + Commands (continued)
-  28. Create keymaps.lua - Keymap setup
+  30. Update init.lua - Main entry point with full setup
 
 ### Issues/Blockers
 - None
