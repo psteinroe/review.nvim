@@ -21,14 +21,18 @@
 
 ### Completed This Session
 - [x] tests/init.lua - Test runner setup (mini.test)
+- [x] tests/helpers.lua - Shared test utilities (mock_diff, mock_pr, mock_comments, expect helpers)
+- [x] plugin/review.lua - Plugin loader (minimal, with Neovim 0.10+ version check)
+
+### Completed This Session (continued)
+- [x] lua/review/utils.lua - Shared utilities (debounce, relative_time, truncate, normalize_path, is_valid_buf/win, safe_require, generate_id)
+- [x] tests/unit/test_utils.lua - Utils tests (24 tests passing)
+- [x] lua/review/init.lua - Minimal module entry point for loading
+- [x] lua/review/config.lua - Configuration system (UI, signs, keymaps, github, AI settings)
+- [x] tests/unit/test_config.lua - Config tests (20 tests passing)
 
 ### Next Steps
 - Phase 1 (continued):
-  2. Create tests/helpers.lua - Shared test utilities
-  3. Create plugin/review.lua - Plugin loader (minimal)
-  4. Create lua/review/utils.lua - Shared utilities
-  5. Create tests/unit/test_utils.lua - Utils tests
-  6. Create lua/review/config.lua - Configuration
   7. Create lua/review/core/state.lua - State management
   8. Create tests/unit/test_state.lua - State tests
 
