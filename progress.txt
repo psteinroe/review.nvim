@@ -131,9 +131,18 @@
 - [x] tests/unit/test_picker.lua - Picker tests (30 tests passing)
 - [x] All 867 tests passing (864 pass, 3 pre-existing failures)
 
+### Completed This Session (continued 22)
+- [x] lua/review/integrations/ai.lua - AI integration with multiple providers
+- [x] Providers: opencode, claude, codex, aider, avante, clipboard, custom
+- [x] Features: auto-detection with preference order, build_prompt(), pick_provider(), terminal helper
+- [x] build_prompt() generates markdown with PR info, diff, comments, custom instructions
+- [x] Provider registration/unregistration API
+- [x] tests/unit/test_ai.lua - AI tests (51 tests passing)
+- [x] All 918 tests passing (915 pass, 3 pre-existing failures)
+
 ### Next Steps
-- Phase 7: AI Integration
-  37. lua/review/integrations/ai.lua - CLI-based AI providers
+- Phase 7: AI Integration (continued)
+  38. tests/integration/test_ai_export.lua - AI prompt generation test
 
 ### Issues/Blockers
 - None
