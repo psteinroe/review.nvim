@@ -33,10 +33,16 @@
 - [x] lua/review/core/state.lua - State management (Review.State, comments, files, PR data)
 - [x] tests/unit/test_state.lua - State tests (33 tests passing)
 
+### Completed This Session (continued 2)
+- [x] lua/review/core/comments.lua - Comment CRUD (add, edit, delete, reply, set_resolved, mark_submitted, get_at_line, etc.)
+- [x] tests/unit/test_comments.lua - Comments tests (46 tests passing)
+
 ### Next Steps
-- Phase 1 (continued):
-  9. Create lua/review/core/comments.lua - Comment CRUD operations
-  10. Create tests/unit/test_comments.lua - Comments tests
+- Phase 2: Git + Diff Parsing
+  9. Create lua/review/integrations/git.lua - Git CLI wrapper
+  10. Create lua/review/core/diff_parser.lua - Parse git diff output
+  11. Create tests/unit/test_diff_parser.lua - Diff parser tests
+  12. Create tests/mocks/git.lua - Git mock for testing
 
 ### Issues/Blockers
 - None
