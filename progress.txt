@@ -91,9 +91,15 @@
 - [x] lua/review/keymaps.lua - Keymap setup (all keybindings, setup/teardown, buffer-local keymaps)
 - [x] tests/unit/test_keymaps.lua - Keymaps tests (32 tests passing)
 
+### Completed This Session (continued 16)
+- [x] lua/review/init.lua - Main entry point with full setup (config, highlights, commands, keymaps, autocmds)
+- [x] Public API: open, open_pr, pick_pr, close, toggle_panel, refresh, status, add_comment, send_to_ai, send_to_clipboard
+- [x] State inspection: is_active, get_state, get_config, is_setup
+- [x] All 665 tests passing
+
 ### Next Steps
 - Phase 5: Navigation + Commands (continued)
-  30. Update init.lua - Main entry point with full setup
+  31. tests/integration/test_local_review.lua - Local review workflow test
 
 ### Issues/Blockers
 - None
