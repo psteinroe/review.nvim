@@ -330,6 +330,9 @@ end
 T["teardown"] = MiniTest.new_set()
 
 T["teardown"]["removes keymaps created by setup"] = function()
+  -- First ensure the keymap doesn't exist from previous tests
+  pcall(vim.keymap.del, "n", "]c")
+
   local config = get_config()
   config.setup({ keymaps = { enabled = true } })
 

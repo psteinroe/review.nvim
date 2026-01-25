@@ -674,6 +674,10 @@ T["create_ref_buffer()"] = MiniTest.new_set({
 })
 
 T["create_ref_buffer()"]["returns nil when git.show_file fails"] = function()
+  -- Reload diff to ensure it has correct git reference after any previous test pollution
+  package.loaded["review.ui.diff"] = nil
+  local diff_mod = require("review.ui.diff")
+
   -- Mock git.show_file to return nil (file not found)
   local git = require("review.integrations.git")
   local original_show_file = git.show_file
@@ -681,7 +685,7 @@ T["create_ref_buffer()"]["returns nil when git.show_file fails"] = function()
     return nil
   end
 
-  local buf = diff.create_ref_buffer("nonexistent/path.lua", "HEAD")
+  local buf = diff_mod.create_ref_buffer("nonexistent/path.lua", "HEAD")
   MiniTest.expect.equality(buf, nil)
 
   -- Restore
@@ -689,13 +693,17 @@ T["create_ref_buffer()"]["returns nil when git.show_file fails"] = function()
 end
 
 T["create_ref_buffer()"]["creates buffer with file content"] = function()
+  -- Reload diff to ensure it has correct git reference after any previous test pollution
+  package.loaded["review.ui.diff"] = nil
+  local diff_mod = require("review.ui.diff")
+
   local git = require("review.integrations.git")
   local original_show_file = git.show_file
   git.show_file = function()
     return "line 1\nline 2\nline 3"
   end
 
-  local buf = diff.create_ref_buffer("test.lua", "HEAD")
+  local buf = diff_mod.create_ref_buffer("test.lua", "HEAD")
   MiniTest.expect.no_equality(buf, nil)
   MiniTest.expect.equality(vim.api.nvim_buf_is_valid(buf), true)
 
@@ -714,13 +722,17 @@ T["create_ref_buffer()"]["creates buffer with file content"] = function()
 end
 
 T["create_ref_buffer()"]["creates editable buffer when readonly=false"] = function()
+  -- Reload diff to ensure it has correct git reference after any previous test pollution
+  package.loaded["review.ui.diff"] = nil
+  local diff_mod = require("review.ui.diff")
+
   local git = require("review.integrations.git")
   local original_show_file = git.show_file
   git.show_file = function()
     return "content"
   end
 
-  local buf = diff.create_ref_buffer("test.lua", "HEAD", { readonly = false })
+  local buf = diff_mod.create_ref_buffer("test.lua", "HEAD", { readonly = false })
   MiniTest.expect.no_equality(buf, nil)
   MiniTest.expect.equality(vim.bo[buf].modifiable, true)
 
