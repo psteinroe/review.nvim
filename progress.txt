@@ -115,9 +115,17 @@
 - [x] tests/unit/test_github.lua - GitHub tests (35 tests passing)
 - [x] All 790 tests passing (787 pass, 3 pre-existing failures)
 
+### Completed This Session (continued 20)
+- [x] lua/review/ui/panel.lua - PR info panel (floating panel for PR details and comments)
+- [x] Features: toggle open/close, PR mode and local mode rendering, description/conversation/code comments/pending sections
+- [x] Comment rendering: author, time, replies, resolved status, review state badges
+- [x] Keymaps: approve/request changes/submit/reply/resolve/edit/delete, cursor-based actions
+- [x] Syntax highlighting for headers, authors, timestamps, badges
+- [x] tests/unit/test_panel.lua - Panel tests (47 tests passing)
+- [x] All 837 tests passing (834 pass, 3 pre-existing failures)
+
 ### Next Steps
 - Phase 6: GitHub Integration (continued)
-  34. lua/review/ui/panel.lua - PR info panel
   35. lua/review/ui/picker.lua - PR picker
 
 ### Issues/Blockers
