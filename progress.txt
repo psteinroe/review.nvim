@@ -50,9 +50,13 @@
 - [x] tests/unit/test_mock_git.lua - Mock git tests
 - [x] Updated tests/init.lua to include mocks directory in Lua path
 
+### Completed This Session (continued 6)
+- [x] lua/review/ui/highlights.lua - Highlight groups (signs, virtual text, file tree, panel, etc.)
+- [x] tests/unit/test_highlights.lua - Highlights tests (29 tests passing)
+
 ### Next Steps
-- Phase 3: Basic UI
-  13. Create ui/highlights.lua - Highlight groups
+- Phase 3: Basic UI (continued)
+  14. Create ui/layout.lua - Window management
 
 ### Issues/Blockers
 - None
