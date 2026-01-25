@@ -109,9 +109,16 @@
 - [x] Tests cover: PR state, PR diff parsing, GitHub comments, comment state integration, filtering, CRUD, file counts, stats, edge cases
 - [x] All 755 tests passing (752 pass, 3 pre-existing failures)
 
+### Completed This Session (continued 19)
+- [x] lua/review/integrations/github.lua - GitHub API wrapper (gh CLI)
+- [x] Features: fetch PR/diff/comments, group threads, submit reviews, approve/request changes, reply to comments, resolve threads via GraphQL
+- [x] tests/unit/test_github.lua - GitHub tests (35 tests passing)
+- [x] All 790 tests passing (787 pass, 3 pre-existing failures)
+
 ### Next Steps
-- Phase 6: GitHub Integration
-  33. lua/review/integrations/github.lua - GitHub API wrapper (gh CLI)
+- Phase 6: GitHub Integration (continued)
+  34. lua/review/ui/panel.lua - PR info panel
+  35. lua/review/ui/picker.lua - PR picker
 
 ### Issues/Blockers
 - None
