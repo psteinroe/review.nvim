@@ -79,9 +79,13 @@
 - [x] lua/review/ui/float.lua - Floating window helpers (create, show_comment, input, multiline_input, confirm, notify, menu, etc.)
 - [x] tests/unit/test_float.lua - Float tests (59 tests passing)
 
+### Completed This Session (continued 13)
+- [x] lua/review/core/navigation.lua - All navigation (comments, files, hunks, focus management)
+- [x] tests/unit/test_navigation.lua - Navigation tests (41 tests passing)
+
 ### Next Steps
-- Phase 5: Navigation + Commands
-  26. Create core/navigation.lua - All navigation
+- Phase 5: Navigation + Commands (continued)
+  27. Create commands.lua - User commands
 
 ### Issues/Blockers
 - None
