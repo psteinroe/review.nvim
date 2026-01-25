@@ -1,0 +1,47 @@
+# review.nvim Progress Log
+
+## 2026-01-25 - Session 1
+
+### Completed
+- Reviewed and refined PLAN.md based on requirements discussion
+- Updated Comment data structure with start_line, end_line, extmark_id fields
+- Added pr_mode field to State ("remote" | "local")
+- Added core/line_tracker.lua module spec for extmark-based position tracking
+- Added utils.lua module spec with shared utilities (debounce, relative_time, truncate, etc.)
+- Updated thread resolution to use GraphQL via `gh api graphql`
+- Simplified OpenCode provider to CLI-only (removed opencode.nvim dependency)
+- Updated Implementation Order to include new modules
+- Added Progress Tracking section to PLAN.md
+- Refactored float.lua and panel.lua to use shared utils.relative_time
+- Created justfile with Ralph loop recipes (ralph-once, afk-ralph, ralph-sandbox)
+- Restructured Implementation Order to introduce tests earlier (test-first approach)
+
+### In Progress
+- Phase 1: Test Infrastructure + Core Foundation
+
+### Completed This Session
+- [x] tests/init.lua - Test runner setup (mini.test)
+
+### Next Steps
+- Phase 1 (continued):
+  2. Create tests/helpers.lua - Shared test utilities
+  3. Create plugin/review.lua - Plugin loader (minimal)
+  4. Create lua/review/utils.lua - Shared utilities
+  5. Create tests/unit/test_utils.lua - Utils tests
+  6. Create lua/review/config.lua - Configuration
+  7. Create lua/review/core/state.lua - State management
+  8. Create tests/unit/test_state.lua - State tests
+
+### Issues/Blockers
+- None
+
+### Decisions Made
+- Diff edits: Auto-save on :w (edit real file in diff mode)
+- PR modes: Support both remote (read-only) and local (editable when checked out)
+- Thread resolution: Use gh api graphql
+- AI providers: CLI-only integration (no Neovim plugin dependencies)
+- Comment positions: Track with Neovim extmarks
+- Multi-line comments: Full LEFT/RIGHT side support
+- Scope: Full plan implementation
+
+---
