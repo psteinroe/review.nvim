@@ -62,9 +62,13 @@
 - [x] lua/review/ui/file_tree.lua - File tree panel (hierarchical display, navigation, selection, keymaps)
 - [x] tests/unit/test_file_tree.lua - File tree tests (48 tests passing)
 
+### Completed This Session (continued 9)
+- [x] lua/review/ui/diff.lua - Diff view rendering (local/PR modes, side-by-side diff, navigation)
+- [x] tests/unit/test_diff.lua - Diff tests (35 tests passing)
+
 ### Next Steps
 - Phase 3: Basic UI (continued)
-  16. Create ui/diff.lua - Diff view rendering
+  17. Create ui/signs.lua - Gutter signs for comments
 
 ### Issues/Blockers
 - None
