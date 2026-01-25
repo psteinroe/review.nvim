@@ -41,10 +41,12 @@
 - [x] lua/review/integrations/git.lua - Git CLI wrapper (run, run_async, diff, changed_files, diff_stats, parse_repo, etc.)
 - [x] tests/unit/test_git.lua - Git tests (41 tests passing)
 
+### Completed This Session (continued 4)
+- [x] lua/review/core/diff_parser.lua - Parse git diff output into structured data
+- [x] tests/unit/test_diff_parser.lua - Diff parser tests (30 tests passing)
+
 ### Next Steps
 - Phase 2: Git + Diff Parsing (continued)
-  10. Create lua/review/core/diff_parser.lua - Parse git diff output
-  11. Create tests/unit/test_diff_parser.lua - Diff parser tests
   12. Create tests/mocks/git.lua - Git mock for testing
 
 ### Issues/Blockers
