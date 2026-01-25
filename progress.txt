@@ -58,9 +58,13 @@
 - [x] lua/review/ui/layout.lua - Window management (tabpage, file tree, diff windows)
 - [x] tests/unit/test_layout.lua - Layout tests (39 tests passing)
 
+### Completed This Session (continued 8)
+- [x] lua/review/ui/file_tree.lua - File tree panel (hierarchical display, navigation, selection, keymaps)
+- [x] tests/unit/test_file_tree.lua - File tree tests (48 tests passing)
+
 ### Next Steps
 - Phase 3: Basic UI (continued)
-  15. Create ui/file_tree.lua - File tree panel
+  16. Create ui/diff.lua - Diff view rendering
 
 ### Issues/Blockers
 - None
