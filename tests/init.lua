@@ -3,7 +3,9 @@
 
 -- Add project to runtime path
 vim.opt.rtp:prepend(".")
-vim.opt.rtp:prepend("./tests")
+
+-- Add tests directory to Lua path for helpers
+package.path = "./tests/?.lua;" .. package.path
 
 -- Set up mini.test
 local mini_path = vim.fn.stdpath("data") .. "/site/pack/deps/start/mini.nvim"
@@ -21,5 +23,5 @@ end
 
 require("mini.test").setup()
 
--- Load helpers (will be created in next task)
--- _G.H = require("tests.helpers")
+-- Load helpers globally for all tests
+_G.H = require("helpers")
