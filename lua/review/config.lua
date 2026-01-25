@@ -30,12 +30,18 @@ local M = {}
 ---@field custom_handler? fun(prompt: string, opts: table) Custom handler for "custom" provider
 ---@field terminal Review.AITerminalConfig Terminal settings
 
+---@class Review.VirtualTextConfig
+---@field enabled boolean Whether virtual text is enabled
+---@field max_length number Maximum length of preview text
+---@field position "eol" | "overlay" | "right_align" Position of virtual text
+
 ---@class Review.Config
 ---@field ui Review.UIConfig UI settings
 ---@field signs Review.SignsConfig Sign characters
 ---@field keymaps Review.KeymapsConfig Keymap settings
 ---@field github Review.GithubConfig GitHub settings
 ---@field ai Review.AIConfig AI integration settings
+---@field virtual_text Review.VirtualTextConfig Virtual text settings
 
 ---@type Review.Config
 M.defaults = {
@@ -92,6 +98,13 @@ M.defaults = {
       height = 15,
       position = "bottom",
     },
+  },
+
+  -- Virtual text settings
+  virtual_text = {
+    enabled = true,
+    max_length = 40,
+    position = "eol",
   },
 }
 
