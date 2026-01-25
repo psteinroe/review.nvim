@@ -1,0 +1,369 @@
+*review.txt*  Code review plugin for Neovim with GitHub and AI integration
+
+Author:  psteinroe
+License: MIT
+
+==============================================================================
+CONTENTS                                                      *review-contents*
+
+    1. Introduction ............................ |review-introduction|
+    2. Requirements ............................ |review-requirements|
+    3. Installation ............................ |review-installation|
+    4. Configuration ........................... |review-configuration|
+    5. Commands ................................ |review-commands|
+    6. Keymaps ................................. |review-keymaps|
+    7. API ..................................... |review-api|
+    8. Workflows ............................... |review-workflows|
+
+==============================================================================
+INTRODUCTION                                              *review-introduction*
+
+review.nvim is a Neovim plugin for efficient code reviews with GitHub
+integration and AI feedback loops.
+
+Key features:
+- Local diff review for AI-generated or manual changes
+- GitHub PR review with full comment integration
+- AI feedback loop via multiple providers
+- Editable diffs - fix issues directly while reviewing
+- Unified comment system for local and GitHub comments
+- Keyboard-driven interface
+
+==============================================================================
+REQUIREMENTS                                              *review-requirements*
+
+- Neovim 0.10+
+- `gh` CLI (optional, for GitHub integration)
+
+==============================================================================
+INSTALLATION                                              *review-installation*
+
+Using lazy.nvim: >lua
+    {
+      "psteinroe/review.nvim",
+      config = function()
+        require("review").setup()
+      end,
+    }
+<
+Using packer.nvim: >lua
+    use {
+      "psteinroe/review.nvim",
+      config = function()
+        require("review").setup()
+      end,
+    }
+<
+==============================================================================
+CONFIGURATION                                            *review-configuration*
+
+Call `require("review").setup(opts)` with a table of options.
+
+Default configuration: >lua
+    require("review").setup({
+      ui = {
+        tree_width = 30,
+        panel_width = 80,
+        panel_height = 40,
+      },
+      signs = {
+        comment_github = "G",
+        comment_local = "L",
+        comment_issue = "!",
+        comment_suggestion = "*",
+        comment_praise = "+",
+        comment_resolved = "R",
+      },
+      keymaps = {
+        enabled = true,
+      },
+      github = {
+        enabled = true,
+      },
+      ai = {
+        provider = "auto",
+        preference = {
+          "opencode", "avante", "claude",
+          "codex", "aider", "clipboard",
+        },
+        instructions = nil,
+        custom_handler = nil,
+        terminal = {
+          height = 15,
+          position = "bottom",
+        },
+      },
+      virtual_text = {
+        enabled = true,
+        max_length = 40,
+        position = "eol",
+      },
+    })
+<
+                                                    *review-config-ui*
+ui.tree_width ~
+    Width of the file tree panel. Default: 30
+
+ui.panel_width ~
+    Width of the PR info panel. Default: 80
+
+ui.panel_height ~
+    Height of the PR info panel. Default: 40
+
+                                                    *review-config-signs*
+signs ~
+    Characters used for gutter signs indicating comments.
+
+                                                    *review-config-keymaps*
+keymaps.enabled ~
+    Whether to set up default keymaps. Set to `false` to define your own.
+    Default: true
+
+                                                    *review-config-github*
+github.enabled ~
+    Whether GitHub integration is enabled. Default: true
+
+                                                    *review-config-ai*
+ai.provider ~
+    AI provider to use. Options: "auto", "opencode", "claude", "codex",
+    "aider", "avante", "clipboard", "custom". Default: "auto"
+
+ai.preference ~
+    List of providers to try in order when `provider = "auto"`.
+
+ai.instructions ~
+    Custom instructions to replace default prompt instructions.
+
+ai.custom_handler ~
+    Function to handle sending to AI when `provider = "custom"`.
+    Signature: `function(prompt, opts)`
+
+ai.terminal.height ~
+    Height of terminal split for AI providers. Default: 15
+
+ai.terminal.position ~
+    Position of terminal. Options: "bottom", "right". Default: "bottom"
+
+                                                    *review-config-virtual-text*
+virtual_text.enabled ~
+    Whether to show inline comment previews. Default: true
+
+virtual_text.max_length ~
+    Maximum length of preview text. Default: 40
+
+virtual_text.position ~
+    Position of virtual text. Options: "eol", "overlay", "right_align".
+    Default: "eol"
+
+==============================================================================
+COMMANDS                                                      *review-commands*
+
+                                                                      *:Review*
+:Review [base]
+    Open local diff review. Without arguments, diffs against HEAD.
+    With a base ref (branch or commit), diffs against that ref.
+
+:Review pr [number]
+    Open PR review. Without number, opens PR picker.
+    With number, opens that specific PR.
+
+:Review close
+    Close the current review session.
+
+:Review panel
+    Toggle the PR info panel.
+
+:Review refresh
+    Refresh the current review (re-render signs, virtual text, tree).
+
+:Review status
+    Show review status (mode, files, comments).
+
+                                                                    *:ReviewAI*
+:ReviewAI [provider]
+    Send review to AI provider. Without argument, uses configured provider.
+    With provider name, uses that specific provider.
+
+:ReviewAI pick
+    Show picker to select AI provider.
+
+:ReviewAI list
+    List available AI providers.
+
+:ReviewAI clipboard
+    Copy review prompt to clipboard.
+
+                                                               *:ReviewComment*
+:ReviewComment [type]
+    Add comment at cursor. Type can be: note (default), issue, suggestion,
+    or praise.
+
+==============================================================================
+KEYMAPS                                                        *review-keymaps*
+
+All keymaps are active when a review session is open.
+
+FILE NAVIGATION ~
+
+    <C-j>       Next file in tree
+    <C-k>       Previous file in tree
+    <Tab>       Open next file
+    <S-Tab>     Open previous file
+
+COMMENT NAVIGATION ~
+
+    ]c          Next comment
+    [c          Previous comment
+    ]u          Next unresolved comment
+    [u          Previous unresolved comment
+    ]m          Next pending comment
+    [m          Previous pending comment
+
+HUNK NAVIGATION ~
+
+    ]h          Next hunk
+    [h          Previous hunk
+
+VIEWS ~
+
+    <leader>rp  Toggle PR panel
+    <leader>rf  Focus file tree
+    <leader>rd  Focus diff view
+
+COMMENT ACTIONS ~
+
+    <leader>cc  Add note comment
+    <leader>ci  Add issue comment
+    <leader>cs  Add suggestion comment
+    <leader>cp  Add praise comment
+    <leader>ce  Edit comment at cursor
+    <leader>cd  Delete comment at cursor
+    K           Show comment popup
+    r           Reply to comment (in diff window)
+    R           Toggle resolve status (in diff window)
+
+PR ACTIONS ~
+
+    <leader>rC  Add conversation comment
+    <leader>rs  Send to AI
+    <leader>rS  Pick AI provider
+    <leader>ry  Copy to clipboard
+    <leader>rg  Submit to GitHub
+    <leader>ra  Approve PR
+    <leader>rx  Request changes
+
+PICKERS ~
+
+    <leader>rr  Pick from review requests
+    <leader>rl  Pick from open PRs
+
+FILE TREE KEYMAPS ~
+
+When focused on the file tree buffer:
+
+    <CR> or o   Open file
+    j           Next file
+    k           Previous file
+    q           Close review
+
+==============================================================================
+API                                                                *review-api*
+
+                                                              *review.setup()*
+review.setup({opts})
+    Initialize the plugin with optional configuration.
+
+                                                               *review.open()*
+review.open([base])
+    Open local diff review against HEAD or specified base ref.
+
+                                                            *review.open_pr()*
+review.open_pr({number})
+    Open PR review for the specified PR number.
+
+                                                            *review.pick_pr()*
+review.pick_pr()
+    Open PR picker to select a PR to review.
+
+                                                              *review.close()*
+review.close()
+    Close the current review session.
+
+                                                       *review.toggle_panel()*
+review.toggle_panel()
+    Toggle the PR info panel.
+
+                                                            *review.refresh()*
+review.refresh()
+    Refresh the current review (signs, virtual text, file tree).
+
+                                                             *review.status()*
+review.status()
+    Show review status information.
+
+                                                        *review.add_comment()*
+review.add_comment([type])
+    Add comment at cursor. Type: "note", "issue", "suggestion", or "praise".
+
+                                                         *review.send_to_ai()*
+review.send_to_ai([provider])
+    Send review to AI provider. Without argument, uses configured provider.
+
+                                                   *review.send_to_clipboard()*
+review.send_to_clipboard()
+    Copy review prompt to clipboard.
+
+                                                          *review.is_active()*
+review.is_active()
+    Returns `true` if a review session is active.
+
+                                                          *review.get_state()*
+review.get_state()
+    Returns the current review state table.
+
+                                                         *review.get_config()*
+review.get_config()
+    Returns the current configuration table.
+
+                                                           *review.is_setup()*
+review.is_setup()
+    Returns `true` if the plugin has been set up.
+
+==============================================================================
+WORKFLOWS                                                    *review-workflows*
+
+LOCAL AI DIFF REVIEW ~
+
+1. AI generates code changes in your working directory
+2. Run `:Review` to see diff against HEAD
+3. Navigate files with <Tab>/<S-Tab>
+4. Add comments with <leader>cc (note), <leader>ci (issue), etc.
+5. Send to AI with <leader>rs or `:ReviewAI`
+6. AI fixes issues based on your comments
+7. Repeat until satisfied
+
+GITHUB PR REVIEW ~
+
+1. Run `:Review pr` to pick a PR or `:Review pr 123` for specific PR
+2. Plugin fetches PR details, diff, and existing comments
+3. Existing comments appear inline in the diff with virtual text
+4. Navigate comments with ]c/[c
+5. Add new comments (they're pending locally)
+6. Reply to threads with `r`
+7. Submit review with <leader>rg (opens submission options)
+
+CUSTOM AI PROVIDER ~
+
+To use a custom AI provider: >lua
+    require("review").setup({
+      ai = {
+        provider = "custom",
+        custom_handler = function(prompt, opts)
+          -- Send prompt to your AI tool
+          -- opts contains: files, comments, mode, pr info
+        end,
+      },
+    })
+<
+==============================================================================
+vim:tw=78:ts=8:ft=help:norl:
