@@ -37,9 +37,12 @@
 - [x] lua/review/core/comments.lua - Comment CRUD (add, edit, delete, reply, set_resolved, mark_submitted, get_at_line, etc.)
 - [x] tests/unit/test_comments.lua - Comments tests (46 tests passing)
 
+### Completed This Session (continued 3)
+- [x] lua/review/integrations/git.lua - Git CLI wrapper (run, run_async, diff, changed_files, diff_stats, parse_repo, etc.)
+- [x] tests/unit/test_git.lua - Git tests (41 tests passing)
+
 ### Next Steps
-- Phase 2: Git + Diff Parsing
-  9. Create lua/review/integrations/git.lua - Git CLI wrapper
+- Phase 2: Git + Diff Parsing (continued)
   10. Create lua/review/core/diff_parser.lua - Parse git diff output
   11. Create tests/unit/test_diff_parser.lua - Diff parser tests
   12. Create tests/mocks/git.lua - Git mock for testing
