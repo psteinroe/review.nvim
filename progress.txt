@@ -54,9 +54,13 @@
 - [x] lua/review/ui/highlights.lua - Highlight groups (signs, virtual text, file tree, panel, etc.)
 - [x] tests/unit/test_highlights.lua - Highlights tests (29 tests passing)
 
+### Completed This Session (continued 7)
+- [x] lua/review/ui/layout.lua - Window management (tabpage, file tree, diff windows)
+- [x] tests/unit/test_layout.lua - Layout tests (39 tests passing)
+
 ### Next Steps
 - Phase 3: Basic UI (continued)
-  14. Create ui/layout.lua - Window management
+  15. Create ui/file_tree.lua - File tree panel
 
 ### Issues/Blockers
 - None
