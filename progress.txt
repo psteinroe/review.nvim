@@ -83,9 +83,13 @@
 - [x] lua/review/core/navigation.lua - All navigation (comments, files, hunks, focus management)
 - [x] tests/unit/test_navigation.lua - Navigation tests (41 tests passing)
 
+### Completed This Session (continued 14)
+- [x] lua/review/commands.lua - User commands (:Review, :ReviewAI, :ReviewComment)
+- [x] tests/unit/test_commands.lua - Commands tests (40 tests passing)
+
 ### Next Steps
 - Phase 5: Navigation + Commands (continued)
-  27. Create commands.lua - User commands
+  28. Create keymaps.lua - Keymap setup
 
 ### Issues/Blockers
 - None
