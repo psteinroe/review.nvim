@@ -103,9 +103,15 @@
 - [x] Discovered bug in ui/diff.lua window navigation (documented in test file for future fix)
 - [x] All 713 tests passing (710 pass, 3 pre-existing failures)
 
+### Completed This Session (continued 18)
+- [x] tests/mocks/github.lua - GitHub mock for testing PR workflows
+- [x] tests/integration/test_pr_review.lua - PR review workflow integration tests (42 tests)
+- [x] Tests cover: PR state, PR diff parsing, GitHub comments, comment state integration, filtering, CRUD, file counts, stats, edge cases
+- [x] All 755 tests passing (752 pass, 3 pre-existing failures)
+
 ### Next Steps
-- Phase 5: Navigation + Commands (continued)
-  32. tests/integration/test_pr_review.lua - PR review workflow test
+- Phase 6: GitHub Integration
+  33. lua/review/integrations/github.lua - GitHub API wrapper (gh CLI)
 
 ### Issues/Blockers
 - None
