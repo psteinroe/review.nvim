@@ -30,11 +30,13 @@
 - [x] lua/review/init.lua - Minimal module entry point for loading
 - [x] lua/review/config.lua - Configuration system (UI, signs, keymaps, github, AI settings)
 - [x] tests/unit/test_config.lua - Config tests (20 tests passing)
+- [x] lua/review/core/state.lua - State management (Review.State, comments, files, PR data)
+- [x] tests/unit/test_state.lua - State tests (33 tests passing)
 
 ### Next Steps
 - Phase 1 (continued):
-  7. Create lua/review/core/state.lua - State management
-  8. Create tests/unit/test_state.lua - State tests
+  9. Create lua/review/core/comments.lua - Comment CRUD operations
+  10. Create tests/unit/test_comments.lua - Comments tests
 
 ### Issues/Blockers
 - None
