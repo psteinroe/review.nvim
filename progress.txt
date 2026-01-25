@@ -151,10 +151,14 @@
 - [x] doc/review.txt - Vim help file with complete documentation
 - [x] All 949 tests passing (946 pass, 3 pre-existing failures)
 
+### Completed This Session (continued 25)
+- [x] Fixed test isolation issues in test_diff.lua and test_keymaps.lua
+- [x] test_diff.lua: Reload diff module in create_ref_buffer tests to get fresh git reference
+- [x] test_keymaps.lua: Clear ]c keymap before teardown test to prevent pollution
+- [x] All 949 tests now passing (0 failures)
+
 ### Next Steps
-- Phase 8: Polish
-  40. tests/ui/test_signs.lua - Signs tests (if not done)
-  41. Final integration testing and bug fixes
+- Implementation complete! All phases done.
 
 ### Issues/Blockers
 - None
