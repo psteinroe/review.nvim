@@ -4,8 +4,8 @@
 -- Add project to runtime path
 vim.opt.rtp:prepend(".")
 
--- Add tests directory to Lua path for helpers
-package.path = "./tests/?.lua;" .. package.path
+-- Add tests directory to Lua path for helpers and mocks
+package.path = "./tests/?.lua;./tests/?/init.lua;" .. package.path
 
 -- Set up mini.test
 local mini_path = vim.fn.stdpath("data") .. "/site/pack/deps/start/mini.nvim"
