@@ -45,9 +45,14 @@
 - [x] lua/review/core/diff_parser.lua - Parse git diff output into structured data
 - [x] tests/unit/test_diff_parser.lua - Diff parser tests (30 tests passing)
 
+### Completed This Session (continued 5)
+- [x] tests/mocks/git.lua - Git mock for testing (40 tests passing)
+- [x] tests/unit/test_mock_git.lua - Mock git tests
+- [x] Updated tests/init.lua to include mocks directory in Lua path
+
 ### Next Steps
-- Phase 2: Git + Diff Parsing (continued)
-  12. Create tests/mocks/git.lua - Git mock for testing
+- Phase 3: Basic UI
+  13. Create ui/highlights.lua - Highlight groups
 
 ### Issues/Blockers
 - None
