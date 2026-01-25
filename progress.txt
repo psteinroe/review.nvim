@@ -70,9 +70,14 @@
 - [x] lua/review/ui/signs.lua - Gutter signs for comments (place/remove, refresh, navigation)
 - [x] tests/unit/test_signs.lua - Signs tests (49 tests passing)
 
+### Completed This Session (continued 11)
+- [x] lua/review/ui/virtual_text.lua - Inline comment previews (icons, truncation, enable/disable, refresh)
+- [x] tests/unit/test_virtual_text.lua - Virtual text tests (59 tests passing)
+- [x] Added virtual_text config to lua/review/config.lua (enabled, max_length, position)
+
 ### Next Steps
 - Phase 3: Basic UI (continued)
-  18. Create ui/virtual_text.lua - Inline comment previews
+  19. Create ui/float.lua - Floating window helpers
 
 ### Issues/Blockers
 - None
