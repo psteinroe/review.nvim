@@ -27,11 +27,13 @@ M.defaults = {
   ReviewSignSuggestion = { link = "DiagnosticOk" },
   ReviewSignPraise = { link = "DiagnosticOk" },
   ReviewSignResolved = { link = "Comment" },
+  ReviewSignAI = { fg = "#cba6f7" }, -- Purple for AI processing
 
   -- Virtual text (inline comment previews)
   ReviewVirtualGithub = { link = "Comment" },
   ReviewVirtualLocal = { fg = "#89b4fa", italic = true },
   ReviewVirtualResolved = { fg = "#6c7086", strikethrough = true },
+  ReviewVirtualAI = { fg = "#cba6f7", italic = true }, -- Purple for AI processing
 
   -- File tree
   ReviewTreeFile = { link = "Normal" },
@@ -41,6 +43,16 @@ M.defaults = {
   ReviewTreeAdded = { fg = "#a6e3a1" },
   ReviewTreeDeleted = { fg = "#f38ba8" },
   ReviewTreeRenamed = { fg = "#89b4fa" },
+
+  -- File tree - reviewed status
+  ReviewTreeReviewed = { fg = "#a6e3a1" }, -- ✓ icon (green)
+  ReviewTreePending = { fg = "#6c7086" }, -- · icon (dim)
+  ReviewTreePath = { fg = "#6c7086" }, -- Dimmed directory portion
+  ReviewTreeFileName = { link = "Normal" }, -- Bright filename
+  ReviewTreeComments = { fg = "#89b4fa" }, -- Comment count
+  ReviewTreeHeader = { bold = true },
+  ReviewTreeStats = { link = "Comment" },
+  ReviewTreeCurrent = { fg = "#cba6f7", bold = true }, -- Currently open file
 
   -- Panel
   ReviewPanelHeader = { bold = true },

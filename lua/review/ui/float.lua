@@ -303,51 +303,74 @@ function M.input(prompt, opts, callback)
   }, callback)
 end
 
----Prompt for multi-line input in a floating window
----@param opts {prompt: string, default?: string, filetype?: string}
+---Prompt for multi-line input in a floating window with full editing capabilities
+---@param opts {prompt: string, default?: string, filetype?: string, file?: string, line?: number}
 ---@param callback fun(lines: string[]?) Callback with result (nil if cancelled)
 function M.multiline_input(opts, callback)
+  local cfg = get_config()
+
   -- Create scratch buffer for input
+  local buf = vim.api.nvim_create_buf(false, true)
+  if not vim.api.nvim_buf_is_valid(buf) then
+    callback(nil)
+    return
+  end
+
+  -- Set initial content
   local lines = {}
   if opts.default then
     lines = vim.split(opts.default, "\n")
   else
     lines = { "" }
   end
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 
-  local cfg = get_config()
-  local width = math.min(60, cfg.max_width)
-  local height = math.min(10, cfg.max_height)
+  -- Set buffer options BEFORE setting filetype to avoid plugin interference
+  vim.bo[buf].buftype = "acwrite"
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].swapfile = false
 
-  -- Center the window in the editor
+  -- Calculate float dimensions
+  local width = math.min(80, cfg.max_width)
+  local height = math.min(15, cfg.max_height)
   local editor_height = vim.o.lines
   local editor_width = vim.o.columns
   local row = math.floor((editor_height - height) / 2)
   local col = math.floor((editor_width - width) / 2)
 
-  local win, buf = M.create(lines, {
-    title = opts.prompt,
-    title_pos = "center",
+  -- Create floating window
+  local title = string.format(" %s [Ctrl+S save, Ctrl+C cancel] ", opts.prompt)
+  local win = vim.api.nvim_open_win(buf, true, {
     relative = "editor",
     row = row,
     col = col,
     width = width,
     height = height,
-    filetype = opts.filetype or "markdown",
-    modifiable = true,
-    enter = true,
-    wrap = true,
+    style = "minimal",
+    border = cfg.border or "rounded",
+    title = title,
+    title_pos = "center",
   })
 
-  if not win or not buf then
+  if not vim.api.nvim_win_is_valid(win) then
+    vim.api.nvim_buf_delete(buf, { force = true })
     callback(nil)
     return
   end
 
-  -- Track whether callback was called
+  -- Set window options
+  vim.wo[win].wrap = true
+  vim.wo[win].number = false
+  vim.wo[win].relativenumber = false
+  vim.wo[win].signcolumn = "no"
+  vim.wo[win].cursorline = true
+
+  -- Now set filetype (after buffer options are locked in)
+  vim.bo[buf].filetype = opts.filetype or "markdown"
+
+  -- Track state
   local callback_called = false
 
-  -- Helper to call callback only once
   local function safe_callback(result)
     if not callback_called then
       callback_called = true
@@ -355,32 +378,66 @@ function M.multiline_input(opts, callback)
     end
   end
 
-  -- Cancel keymap
-  vim.keymap.set({ "n", "i" }, "<C-c>", function()
-    M.close(win)
+  local function save_and_close()
+    local result = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    -- Remove empty trailing lines
+    while #result > 0 and result[#result] == "" do
+      table.remove(result)
+    end
+    -- Close window (will trigger BufWipeout but we already have result)
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_close(win, true)
+    end
+    safe_callback(result)
+  end
+
+  local function cancel()
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_close(win, true)
+    end
     safe_callback(nil)
-  end, { buffer = buf, nowait = true })
+  end
 
-  -- Save keymap (Ctrl+S)
-  vim.keymap.set({ "n", "i" }, "<C-s>", function()
-    local result = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    M.close(win)
-    safe_callback(result)
-  end, { buffer = buf, nowait = true })
+  -- Save keymaps - using vim.api for more control
+  local keymap_opts = { buffer = buf, silent = true }
 
-  -- Alternative save with <CR> in normal mode (optional, can be disabled)
-  vim.keymap.set("n", "<CR>", function()
-    local result = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-    M.close(win)
-    safe_callback(result)
-  end, { buffer = buf, nowait = true })
+  -- Ctrl+S to save (both modes)
+  vim.keymap.set("n", "<C-s>", save_and_close, keymap_opts)
+  vim.keymap.set("i", "<C-s>", save_and_close, keymap_opts)
 
-  -- Handle buffer close (e.g., :q)
-  vim.api.nvim_create_autocmd("BufWipeout", {
+  -- Enter in normal mode to save
+  vim.keymap.set("n", "<CR>", save_and_close, keymap_opts)
+
+  -- ZZ to save (vim style)
+  vim.keymap.set("n", "ZZ", save_and_close, keymap_opts)
+
+  -- :w also saves (via BufWriteCmd)
+  vim.api.nvim_create_autocmd("BufWriteCmd", {
     buffer = buf,
     once = true,
     callback = function()
-      safe_callback(nil)
+      save_and_close()
+    end,
+  })
+
+  -- Ctrl+C to cancel (both modes)
+  vim.keymap.set("n", "<C-c>", cancel, keymap_opts)
+  vim.keymap.set("i", "<C-c>", cancel, keymap_opts)
+
+  -- q in normal mode to cancel
+  vim.keymap.set("n", "q", cancel, keymap_opts)
+
+  -- Escape in normal mode to cancel
+  vim.keymap.set("n", "<Esc>", cancel, keymap_opts)
+
+  -- Handle window close (e.g., :q or closing externally)
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(win),
+    once = true,
+    callback = function()
+      vim.schedule(function()
+        safe_callback(nil)
+      end)
     end,
   })
 

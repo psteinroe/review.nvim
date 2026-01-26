@@ -214,6 +214,46 @@ T["root_dir()"]["returns nil outside git repo"] = function()
   vim.fn.delete(tmp_dir, "rf")
 end
 
+T["root_dir()"]["handles oil.nvim buffer paths"] = function()
+  local tmp_dir = create_test_repo()
+  local orig_dir = vim.fn.getcwd()
+  vim.cmd("cd " .. tmp_dir)
+
+  -- Create a buffer with oil:// prefix (simulating oil.nvim)
+  local oil_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(oil_buf, "oil://" .. tmp_dir)
+  vim.api.nvim_set_current_buf(oil_buf)
+
+  local root = git.root_dir()
+  local expected = vim.fn.resolve(tmp_dir)
+  local actual = vim.fn.resolve(root)
+  MiniTest.expect.equality(actual, expected)
+
+  vim.api.nvim_buf_delete(oil_buf, { force = true })
+  vim.cmd("cd " .. orig_dir)
+  cleanup_repo(tmp_dir)
+end
+
+T["root_dir()"]["handles fugitive buffer paths"] = function()
+  local tmp_dir = create_test_repo()
+  local orig_dir = vim.fn.getcwd()
+  vim.cmd("cd " .. tmp_dir)
+
+  -- Create a buffer with fugitive:// prefix
+  local fug_buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_name(fug_buf, "fugitive://" .. tmp_dir .. "/.git//0/test.lua")
+  vim.api.nvim_set_current_buf(fug_buf)
+
+  local root = git.root_dir()
+  local expected = vim.fn.resolve(tmp_dir)
+  local actual = vim.fn.resolve(root)
+  MiniTest.expect.equality(actual, expected)
+
+  vim.api.nvim_buf_delete(fug_buf, { force = true })
+  vim.cmd("cd " .. orig_dir)
+  cleanup_repo(tmp_dir)
+end
+
 T["ref_exists()"] = MiniTest.new_set()
 
 T["ref_exists()"]["returns true for HEAD"] = function()

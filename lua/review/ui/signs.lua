@@ -30,6 +30,8 @@ local function get_sign_definitions()
     comment_suggestion = { text = cfg.comment_suggestion, texthl = "ReviewSignSuggestion" },
     comment_praise = { text = cfg.comment_praise, texthl = "ReviewSignPraise" },
     comment_resolved = { text = cfg.comment_resolved, texthl = "ReviewSignResolved" },
+    comment_ai_processing = { text = cfg.comment_ai_processing, texthl = "ReviewSignAI" },
+    comment_ai_complete = { text = "✓", texthl = "ReviewSignResolved" },
   }
 end
 
@@ -73,7 +75,12 @@ end
 ---@param comment Review.Comment
 ---@return string
 function M.get_sign_name(comment)
-  if comment.resolved then
+  -- AI processing/complete takes priority
+  if comment.status == "ai_processing" then
+    return "Review_comment_ai_processing"
+  elseif comment.status == "ai_complete" then
+    return "Review_comment_ai_complete"
+  elseif comment.resolved then
     return "Review_comment_resolved"
   elseif comment.kind == "local" then
     if comment.type == "issue" then
@@ -122,13 +129,29 @@ function M.place_sign(buf, comment)
     return nil
   end
 
+  -- Ensure line is a valid number
+  local lnum = tonumber(comment.line)
+  if not lnum or lnum < 1 then
+    return nil
+  end
+
+  -- Check line is within buffer range
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  if lnum > line_count then
+    return nil
+  end
+
   local sign_name = M.get_sign_name(comment)
-  local sign_id = vim.fn.sign_place(0, SIGN_GROUP, sign_name, buf, {
-    lnum = comment.line,
+
+  local ok, sign_id = pcall(vim.fn.sign_place, 0, SIGN_GROUP, sign_name, buf, {
+    lnum = lnum,
     priority = 10,
   })
 
-  return sign_id
+  if ok then
+    return sign_id
+  end
+  return nil
 end
 
 ---Remove a sign by ID from a buffer
@@ -180,15 +203,24 @@ function M.refresh_buffer(buf, file)
   end
 end
 
----Refresh signs in the current buffer
+---Refresh signs in the diff buffer(s)
 function M.refresh()
-  local buf = vim.api.nvim_get_current_buf()
   local file = state.state.current_file
   if not file then
     return
   end
 
-  M.refresh_buffer(buf, file)
+  -- Try to get the diff buffer from layout
+  local diff_buf = state.state.layout.diff_buf
+  if diff_buf and vim.api.nvim_buf_is_valid(diff_buf) then
+    M.refresh_buffer(diff_buf, file)
+  end
+
+  -- Also refresh current buffer if different
+  local current_buf = vim.api.nvim_get_current_buf()
+  if current_buf ~= diff_buf and vim.api.nvim_buf_is_valid(current_buf) then
+    M.refresh_buffer(current_buf, file)
+  end
 end
 
 ---Get all placed signs in a buffer

@@ -63,7 +63,9 @@ function M.diff(base, head, file)
     table.insert(args, "--")
     table.insert(args, file)
   end
-  local result = M.run(args)
+  -- Use git root directory to ensure we're in the right place
+  local root = M.root_dir()
+  local result = M.run(args, { cwd = root })
   return result.stdout
 end
 
@@ -79,15 +81,29 @@ function M.changed_files(base, head)
   if head then
     table.insert(args, head)
   end
-  local result = M.run(args)
+  local root = M.root_dir()
+  local result = M.run(args, { cwd = root })
+  return vim.split(result.stdout, "\n", { trimempty = true })
+end
+
+---Get list of untracked files
+---@return string[] List of untracked file paths
+function M.get_untracked_files()
+  local root = M.root_dir()
+  local result = M.run({ "ls-files", "--others", "--exclude-standard" }, { cwd = root })
+  if result.code ~= 0 then
+    return {}
+  end
   return vim.split(result.stdout, "\n", { trimempty = true })
 end
 
 ---Get diff with file status (added, modified, deleted, renamed)
 ---@param base? string Base ref
 ---@param head? string Head ref
+---@param opts? {include_untracked?: boolean}
 ---@return {path: string, status: string, old_path?: string}[]
-function M.changed_files_with_status(base, head)
+function M.changed_files_with_status(base, head, opts)
+  opts = opts or {}
   local args = { "diff", "--name-status" }
   if base then
     table.insert(args, base)
@@ -97,6 +113,7 @@ function M.changed_files_with_status(base, head)
   end
   local result = M.run(args)
   local files = {}
+  local seen = {}
 
   for line in result.stdout:gmatch("[^\n]+") do
     local status, path, old_path = line:match("^([AMDRC])%d*%s+(.+)$")
@@ -114,6 +131,20 @@ function M.changed_files_with_status(base, head)
         file.old_path = old_path
       end
       table.insert(files, file)
+      seen[path] = true
+    end
+  end
+
+  -- Include untracked files as "added"
+  if opts.include_untracked then
+    local untracked = M.get_untracked_files()
+    for _, path in ipairs(untracked) do
+      if not seen[path] then
+        table.insert(files, {
+          path = path,
+          status = "added",
+        })
+      end
     end
   end
 
@@ -287,9 +318,38 @@ function M.is_clean()
 end
 
 ---Get the root directory of the git repository
+---@param path? string Optional path to start searching from (defaults to current buffer or cwd)
 ---@return string? Root path or nil if not in a git repo
-function M.root_dir()
-  local result = M.run({ "rev-parse", "--show-toplevel" })
+function M.root_dir(path)
+  -- Try to get path from current buffer if not provided
+  if not path then
+    local bufname = vim.api.nvim_buf_get_name(0)
+    if bufname and bufname ~= "" then
+      -- Handle special buffer types (oil.nvim, fugitive, etc.)
+      -- oil:///path/to/dir -> /path/to/dir
+      -- fugitive:///path/.git//... -> /path
+      if bufname:match("^%w+://") then
+        -- Extract path from URL-like buffer names
+        local extracted = bufname:match("^%w+://(.+)$")
+        if extracted then
+          -- Remove any trailing git-specific paths for fugitive
+          extracted = extracted:gsub("%.git//.*$", "")
+          path = extracted
+        end
+      else
+        path = vim.fn.fnamemodify(bufname, ":h")
+      end
+    end
+  end
+
+  -- Fallback to cwd if path is still nil or invalid
+  -- Note: vim.fn.isdirectory returns 0 or 1, and in Lua 0 is truthy
+  if not path or path == "" or vim.fn.isdirectory(path) ~= 1 then
+    path = vim.fn.getcwd()
+  end
+
+  -- Run git rev-parse from the detected path
+  local result = M.run({ "rev-parse", "--show-toplevel" }, { cwd = path })
   if result.code == 0 then
     return vim.trim(result.stdout)
   end
@@ -297,9 +357,33 @@ function M.root_dir()
 end
 
 ---Check if current directory is inside a git repository
+---@param path? string Optional path to check
 ---@return boolean
-function M.is_git_repo()
-  local result = M.run({ "rev-parse", "--is-inside-work-tree" })
+function M.is_git_repo(path)
+  -- Try to get path from current buffer if not provided
+  if not path then
+    local bufname = vim.api.nvim_buf_get_name(0)
+    if bufname and bufname ~= "" then
+      -- Handle special buffer types (oil.nvim, fugitive, etc.)
+      if bufname:match("^%w+://") then
+        local extracted = bufname:match("^%w+://(.+)$")
+        if extracted then
+          extracted = extracted:gsub("%.git//.*$", "")
+          path = extracted
+        end
+      else
+        path = vim.fn.fnamemodify(bufname, ":h")
+      end
+    end
+  end
+
+  -- Fallback to cwd if path is still nil or invalid
+  -- Note: vim.fn.isdirectory returns 0 or 1, and in Lua 0 is truthy
+  if not path or path == "" or vim.fn.isdirectory(path) ~= 1 then
+    path = vim.fn.getcwd()
+  end
+
+  local result = M.run({ "rev-parse", "--is-inside-work-tree" }, { cwd = path })
   return result.code == 0 and vim.trim(result.stdout) == "true"
 end
 
@@ -345,6 +429,56 @@ end
 ---@return string? error Error message if failed
 function M.checkout(ref)
   local result = M.run({ "checkout", ref })
+  if result.code == 0 then
+    return true, nil
+  end
+  return false, vim.trim(result.stderr)
+end
+
+---Get list of staged files
+---@return string[] List of staged file paths
+function M.get_staged_files()
+  local root = M.root_dir()
+  local result = M.run({ "diff", "--cached", "--name-only" }, { cwd = root })
+  if result.code ~= 0 then
+    return {}
+  end
+  return vim.split(result.stdout, "\n", { trimempty = true })
+end
+
+---Check if a file is staged
+---@param path string File path (relative to git root)
+---@return boolean
+function M.is_staged(path)
+  local staged = M.get_staged_files()
+  for _, file in ipairs(staged) do
+    if file == path then
+      return true
+    end
+  end
+  return false
+end
+
+---Stage a file
+---@param path string File path (relative to git root)
+---@return boolean success
+---@return string? error Error message if failed
+function M.stage_file(path)
+  local root = M.root_dir()
+  local result = M.run({ "add", "--", path }, { cwd = root })
+  if result.code == 0 then
+    return true, nil
+  end
+  return false, vim.trim(result.stderr)
+end
+
+---Unstage a file
+---@param path string File path (relative to git root)
+---@return boolean success
+---@return string? error Error message if failed
+function M.unstage_file(path)
+  local root = M.root_dir()
+  local result = M.run({ "reset", "HEAD", "--", path }, { cwd = root })
   if result.code == 0 then
     return true, nil
   end

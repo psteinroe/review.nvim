@@ -214,17 +214,14 @@ function M.goto_comment(comment, idx)
     return
   end
 
+  local needs_file_open = comment.file and comment.file ~= state.state.current_file
+
   -- Open file if different
-  if comment.file and comment.file ~= state.state.current_file then
+  if needs_file_open then
     local diff = utils.safe_require("review.ui.diff")
     if diff then
       diff.open_file(comment.file)
     end
-  end
-
-  -- Jump to line
-  if comment.line then
-    M.goto_line(comment.line)
   end
 
   -- Update index
@@ -232,10 +229,28 @@ function M.goto_comment(comment, idx)
     state.state.current_comment_idx = idx
   end
 
-  -- Show float popup
-  local float = utils.safe_require("review.ui.float")
-  if float then
-    float.show_comment(comment)
+  -- Schedule line jump and popup to run after file is fully loaded
+  -- This ensures it runs after diff.open_file's scheduled jump_to_first_hunk
+  local function jump_and_show()
+    -- Jump to line
+    if comment.line then
+      M.goto_line(comment.line)
+    end
+
+    -- Show float popup
+    local float = utils.safe_require("review.ui.float")
+    if float then
+      float.show_comment(comment)
+    end
+  end
+
+  if needs_file_open then
+    -- Double schedule to ensure we run after open_file's scheduled actions
+    vim.schedule(function()
+      vim.schedule(jump_and_show)
+    end)
+  else
+    jump_and_show()
   end
 end
 
@@ -253,7 +268,9 @@ function M.get_comment_at_cursor()
   end
 
   local comments = require("review.core.comments")
-  return comments.get_at_line(current_file, line)
+  local at_line = comments.get_at_line(current_file, line)
+  -- Return first comment at this line (if any)
+  return at_line[1]
 end
 
 ---Get all comments at current cursor line
@@ -289,6 +306,114 @@ function M.prev_hunk()
   pcall(vim.cmd, "normal! [c")
 end
 
+---Check if current line is part of a diff (highlighted)
+---@return boolean
+local function is_on_diff_line()
+  local line = vim.fn.line(".")
+  -- Check multiple columns since diff highlight might not start at col 1
+  for col = 1, math.min(10, vim.fn.col("$")) do
+    if vim.fn.diff_hlID(line, col) > 0 then
+      return true
+    end
+  end
+  return false
+end
+
+---Navigate to next hunk across files
+---If at last hunk in current file, opens next file and jumps to first hunk
+function M.next_hunk_across_files()
+  local layout = utils.safe_require("review.ui.layout")
+  if not layout then
+    return
+  end
+
+  -- Ensure we're in the diff window
+  layout.focus_diff()
+
+  -- Save current view state
+  local view = vim.fn.winsaveview()
+  local start_line = view.lnum
+
+  -- Try to go to next hunk
+  pcall(vim.cmd, "normal! ]c")
+
+  -- Get new position
+  local new_line = vim.fn.line(".")
+
+  -- Check if we actually moved to a diff line
+  local on_diff = is_on_diff_line()
+
+  if new_line == start_line or not on_diff then
+    -- Didn't move to a new hunk - restore position and go to next file
+    vim.fn.winrestview(view)
+    M.open_next_file()
+  end
+  -- Otherwise we successfully moved to next hunk
+end
+
+---Navigate to previous hunk across files
+---If at first hunk in current file, opens previous file and jumps to last hunk
+function M.prev_hunk_across_files()
+  local layout = utils.safe_require("review.ui.layout")
+  if not layout then
+    return
+  end
+
+  -- Ensure we're in the diff window
+  layout.focus_diff()
+
+  -- Save current view state
+  local view = vim.fn.winsaveview()
+  local start_line = view.lnum
+
+  -- Try to go to previous hunk
+  pcall(vim.cmd, "normal! [c")
+
+  -- Get new position
+  local new_line = vim.fn.line(".")
+
+  -- Check if we actually moved to a diff line
+  local on_diff = is_on_diff_line()
+
+  if new_line == start_line or not on_diff then
+    -- Didn't move to a new hunk - restore position and go to previous file
+    vim.fn.winrestview(view)
+
+    local tree = utils.safe_require("review.ui.file_tree")
+    if not tree then
+      return
+    end
+
+    local sorted_paths = tree.get_sorted_paths()
+    if #sorted_paths == 0 then
+      return
+    end
+
+    local current_idx = M.get_current_file_idx()
+    local prev_idx = current_idx - 1
+    if prev_idx < 1 then
+      prev_idx = #sorted_paths -- Wrap around
+    end
+
+    local path = sorted_paths[prev_idx]
+    if path then
+      local diff = utils.safe_require("review.ui.diff")
+      if diff then
+        diff.open_file(path)
+        -- Jump to last hunk (go to end, then find last change)
+        vim.schedule(function()
+          vim.cmd("normal! G")
+          pcall(vim.cmd, "normal! [c")
+        end)
+      end
+
+      -- Update file tree selection
+      tree.set_selected_idx(prev_idx)
+    end
+  end
+  -- Otherwise we successfully moved to previous hunk
+end
+
 ---File tree navigation: select next file
 function M.tree_next()
   local tree = utils.safe_require("review.ui.file_tree")
@@ -305,39 +430,46 @@ function M.tree_prev()
   end
 end
 
----Open next file in the file list
+---Open next file in the file list (sorted display order)
 function M.open_next_file()
-  local files = state.state.files
-  if #files == 0 then
+  local tree = utils.safe_require("review.ui.file_tree")
+  if not tree then
+    return
+  end
+
+  local sorted_paths = tree.get_sorted_paths()
+  if #sorted_paths == 0 then
     vim.notify("No files", vim.log.levels.INFO)
     return
   end
 
   local current_idx = M.get_current_file_idx()
   local next_idx = current_idx + 1
-  if next_idx > #files then
+  if next_idx > #sorted_paths then
     next_idx = 1 -- Wrap around
   end
 
-  local file = files[next_idx]
-  if file then
+  local path = sorted_paths[next_idx]
+  if path then
     local diff = utils.safe_require("review.ui.diff")
     if diff then
-      diff.open_file(file.path)
+      diff.open_file(path)
     end
 
     -- Update file tree selection
-    local tree = utils.safe_require("review.ui.file_tree")
-    if tree then
-      tree.set_selected_idx(next_idx)
-    end
+    tree.set_selected_idx(next_idx)
   end
 end
 
----Open previous file in the file list
+---Open previous file in the file list (sorted display order)
 function M.open_prev_file()
-  local files = state.state.files
-  if #files == 0 then
+  local tree = utils.safe_require("review.ui.file_tree")
+  if not tree then
+    return
+  end
+
+  local sorted_paths = tree.get_sorted_paths()
+  if #sorted_paths == 0 then
     vim.notify("No files", vim.log.levels.INFO)
     return
   end
@@ -345,25 +477,22 @@ function M.open_prev_file()
   local current_idx = M.get_current_file_idx()
   local prev_idx = current_idx - 1
   if prev_idx < 1 then
-    prev_idx = #files -- Wrap around
+    prev_idx = #sorted_paths -- Wrap around
   end
 
-  local file = files[prev_idx]
-  if file then
+  local path = sorted_paths[prev_idx]
+  if path then
     local diff = utils.safe_require("review.ui.diff")
     if diff then
-      diff.open_file(file.path)
+      diff.open_file(path)
     end
 
     -- Update file tree selection
-    local tree = utils.safe_require("review.ui.file_tree")
-    if tree then
-      tree.set_selected_idx(prev_idx)
-    end
+    tree.set_selected_idx(prev_idx)
   end
 end
 
----Get current file index in files list
+---Get current file index in sorted display order
 ---@return number
 function M.get_current_file_idx()
   local current_file = state.state.current_file
@@ -371,10 +500,9 @@ function M.get_current_file_idx()
     return 0
   end
 
-  for i, file in ipairs(state.state.files) do
-    if file.path == current_file then
-      return i
-    end
+  local tree = utils.safe_require("review.ui.file_tree")
+  if tree then
+    return tree.get_display_idx_for_path(current_file) or 0
   end
   return 0
 end

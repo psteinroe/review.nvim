@@ -14,6 +14,7 @@ function M.setup()
     desc = "Open code review interface",
   })
 
+
   -- ReviewAI command for AI integration
   vim.api.nvim_create_user_command("ReviewAI", function(opts)
     M.handle_ai_command(opts.args)
@@ -23,6 +24,52 @@ function M.setup()
       return M.complete_ai(arg_lead, cmd_line, cursor_pos)
     end,
     desc = "Send review to AI provider",
+  })
+
+  -- ReviewAICancel command to stop running AI job
+  vim.api.nvim_create_user_command("ReviewAICancel", function()
+    local ai = require("review.integrations.ai")
+    ai.cancel()
+  end, {
+    desc = "Cancel running AI job",
+  })
+
+  -- ReviewAIStatus command to show AI job status
+  vim.api.nvim_create_user_command("ReviewAIStatus", function()
+    local ai = require("review.integrations.ai")
+    local status = ai.get_status()
+    if status then
+      vim.notify(status, vim.log.levels.INFO)
+    else
+      vim.notify("No AI job running", vim.log.levels.INFO)
+    end
+  end, {
+    desc = "Show AI job status",
+  })
+
+  -- ReviewAIOutput command to show AI output in floating window
+  vim.api.nvim_create_user_command("ReviewAIOutput", function()
+    local ai = require("review.integrations.ai")
+    ai.show_output()
+  end, {
+    desc = "Show AI job output",
+  })
+
+  -- ReviewAIDebug command to show debug info
+  vim.api.nvim_create_user_command("ReviewAIDebug", function()
+    local ai = require("review.integrations.ai")
+    local info = ai.get_debug_info()
+    vim.notify(info, vim.log.levels.INFO)
+  end, {
+    desc = "Show AI job debug info",
+  })
+
+  -- ReviewAICopyCmd command to copy command for manual testing
+  vim.api.nvim_create_user_command("ReviewAICopyCmd", function()
+    local ai = require("review.integrations.ai")
+    ai.copy_command()
+  end, {
+    desc = "Copy AI command to clipboard for manual testing",
   })
 
   -- ReviewComment command for quick comment actions
@@ -42,8 +89,8 @@ end
 function M.handle_review_command(args)
   local parsed = vim.split(args, " ", { trimempty = true })
 
-  if #parsed == 0 then
-    -- :Review - open local diff against HEAD
+  if #parsed == 0 or parsed[1] == "open" then
+    -- :Review or :Review open - open local diff against HEAD
     M.open_local()
   elseif parsed[1] == "close" then
     -- :Review close
@@ -80,6 +127,7 @@ end
 ---@param args string Command arguments
 function M.handle_ai_command(args)
   local state = require("review.core.state")
+  local ai = require("review.integrations.ai")
 
   if not state.is_active() then
     vim.notify("No active review session", vim.log.levels.WARN)
@@ -88,23 +136,32 @@ function M.handle_ai_command(args)
 
   local parsed = vim.split(args, " ", { trimempty = true })
 
-  -- For now, we'll provide a stub implementation
-  -- The full AI integration will be in integrations/ai.lua
   if #parsed == 0 then
-    -- :ReviewAI - use configured/auto provider
-    M.send_to_ai()
+    -- :ReviewAI - prompt for extra instructions, then send
+    ai.send_with_prompt()
   elseif parsed[1] == "pick" then
     -- :ReviewAI pick - show provider picker
-    M.pick_ai_provider()
+    ai.pick_provider()
   elseif parsed[1] == "list" then
     -- :ReviewAI list - show available providers
     M.list_ai_providers()
   elseif parsed[1] == "clipboard" then
     -- :ReviewAI clipboard - copy to clipboard
-    M.send_to_clipboard()
+    ai.send_to_clipboard()
+  elseif parsed[1] == "status" then
+    -- :ReviewAI status - show status
+    local status = ai.get_status()
+    if status then
+      vim.notify(status, vim.log.levels.INFO)
+    else
+      vim.notify("No AI job running", vim.log.levels.INFO)
+    end
+  elseif parsed[1] == "cancel" then
+    -- :ReviewAI cancel - cancel job
+    ai.cancel()
   else
-    -- :ReviewAI <provider> - use specific provider
-    M.send_to_ai(parsed[1])
+    -- :ReviewAI <provider> - use specific provider (not implemented for background mode)
+    vim.notify("Use :ReviewAI pick to select a provider", vim.log.levels.INFO)
   end
 end
 
@@ -162,7 +219,7 @@ end
 ---@param cursor_pos number Cursor position
 ---@return string[]
 function M.complete_ai(arg_lead, cmd_line, cursor_pos)
-  local completions = { "pick", "list", "clipboard", "opencode", "claude", "codex", "aider", "avante" }
+  local completions = { "pick", "list", "clipboard", "status", "cancel" }
   return vim.tbl_filter(function(item)
     return item:find(arg_lead, 1, true) == 1
   end, completions)
@@ -195,21 +252,40 @@ function M.open_local(base)
   local layout = require("review.ui.layout")
   local file_tree = require("review.ui.file_tree")
   local highlights = require("review.ui.highlights")
+  local signs = require("review.ui.signs")
 
-  -- Setup highlights
+  -- Setup highlights and signs
   highlights.setup()
+  signs.setup()
 
-  -- Get diff
+  -- Get diff for tracked changes
   local diff_output = git.diff(base)
-  if not diff_output or diff_output == "" then
-    vim.notify("No changes to review against " .. base, vim.log.levels.INFO)
-    return
-  end
 
   -- Parse diff
-  local files = diff_parser.parse(diff_output)
+  local files = diff_parser.parse(diff_output or "")
+
+  -- Also include untracked files as "added"
+  local untracked = git.get_untracked_files()
+  local seen = {}
+  for _, f in ipairs(files) do
+    seen[f.path] = true
+  end
+  for _, path in ipairs(untracked) do
+    if not seen[path] then
+      table.insert(files, {
+        path = path,
+        status = "added",
+        additions = 0,
+        deletions = 0,
+        comment_count = 0,
+        hunks = {},
+        reviewed = false,
+      })
+    end
+  end
+
   if #files == 0 then
-    vim.notify("No changed files found", vim.log.levels.INFO)
+    vim.notify("No changes to review against " .. base, vim.log.levels.INFO)
     return
   end
 
@@ -222,14 +298,11 @@ function M.open_local(base)
   -- Open layout
   layout.open()
 
-  -- Render file tree
-  file_tree.render()
+  -- Initialize file tree (sets up keymaps and renders)
+  file_tree.init()
 
-  -- Open first file if available
-  if #files > 0 then
-    local diff = require("review.ui.diff")
-    diff.open_file(files[1].path)
-  end
+  -- Focus on file tree with first file selected (don't auto-open diff)
+  layout.focus_tree()
 
   vim.notify(string.format("Review opened: %d files changed (base: %s)", #files, base), vim.log.levels.INFO)
 end
@@ -339,6 +412,9 @@ function M.add_comment(comment_type)
   local state = require("review.core.state")
   local comments = require("review.core.comments")
   local float = require("review.ui.float")
+  local signs = require("review.ui.signs")
+  local virtual_text = require("review.ui.virtual_text")
+  local file_tree = require("review.ui.file_tree")
 
   local file = state.state.current_file
   if not file then
@@ -347,83 +423,76 @@ function M.add_comment(comment_type)
   end
 
   local line = vim.api.nvim_win_get_cursor(0)[1]
+  local original_win = vim.api.nvim_get_current_win()
 
   float.multiline_input({
-    prompt = "Comment (" .. comment_type .. ")",
+    prompt = string.format("Comment (%s)", comment_type),
+    file = file,
+    line = line,
+    filetype = "markdown",
   }, function(lines)
     if lines and #lines > 0 then
       local body = table.concat(lines, "\n")
-      local comment = comments.add(file, line, body, comment_type)
-      vim.notify(string.format("Added %s comment at line %d", comment_type, line), vim.log.levels.INFO)
+      comments.add(file, line, body, comment_type)
+      vim.schedule(function()
+        signs.refresh()
+        virtual_text.refresh()
+        file_tree.render()
+        -- Restore cursor to comment line
+        if vim.api.nvim_win_is_valid(original_win) then
+          vim.api.nvim_set_current_win(original_win)
+          pcall(vim.api.nvim_win_set_cursor, original_win, { line, 0 })
+        end
+        vim.notify(string.format("Added %s comment at line %d", comment_type, line), vim.log.levels.INFO)
+      end)
     end
   end)
 end
 
----Send to AI (stub)
----@param provider? string Specific provider to use
-function M.send_to_ai(provider)
+---Send to AI
+function M.send_to_ai()
   local state = require("review.core.state")
+  local ai = require("review.integrations.ai")
 
   if not state.is_active() then
     vim.notify("No active review session", vim.log.levels.WARN)
     return
   end
 
-  -- AI integration will be in integrations/ai.lua
-  if provider then
-    vim.notify(string.format("Sending to AI provider: %s (not yet implemented)", provider), vim.log.levels.INFO)
-  else
-    vim.notify("Sending to AI (not yet implemented)", vim.log.levels.INFO)
-  end
+  ai.send_with_prompt()
 end
 
----Pick AI provider (stub)
+---Pick AI provider
 function M.pick_ai_provider()
-  vim.notify("AI provider picker not yet implemented", vim.log.levels.INFO)
+  local ai = require("review.integrations.ai")
+  ai.pick_provider()
 end
 
----List AI providers (stub)
+---List AI providers
 function M.list_ai_providers()
-  local providers = { "opencode", "claude", "codex", "aider", "avante", "clipboard" }
-  vim.notify("Available AI providers:\n  " .. table.concat(providers, "\n  "), vim.log.levels.INFO)
+  local ai = require("review.integrations.ai")
+  local providers = ai.get_available_providers()
+
+  local lines = { "Available AI providers:" }
+  for _, p in ipairs(providers) do
+    local status = p.available and "✓" or "✗"
+    table.insert(lines, string.format("  %s %s", status, p.name))
+  end
+
+  vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO)
 end
 
 ---Send to clipboard
 function M.send_to_clipboard()
   local state = require("review.core.state")
+  local ai = require("review.integrations.ai")
 
   if not state.is_active() then
     vim.notify("No active review session", vim.log.levels.WARN)
     return
   end
 
-  -- Build prompt for clipboard
-  local lines = { "# Code Review", "" }
-
-  -- Add file info
-  table.insert(lines, "## Changed Files")
-  for _, file in ipairs(state.state.files) do
-    table.insert(lines, string.format("- %s (%s)", file.path, file.status))
-  end
-  table.insert(lines, "")
-
-  -- Add pending comments
-  local pending = state.get_pending_comments()
-  if #pending > 0 then
-    table.insert(lines, "## Review Comments")
-    for i, comment in ipairs(pending) do
-      local location = comment.file and string.format("`%s:%d`", comment.file, comment.line) or ""
-      table.insert(lines, string.format("%d. [%s] %s", i, comment.type or "note", location))
-      table.insert(lines, string.format("   %s", comment.body))
-      table.insert(lines, "")
-    end
-  end
-
-  local prompt = table.concat(lines, "\n")
-  vim.fn.setreg("+", prompt)
-  vim.fn.setreg("*", prompt)
-
-  vim.notify("Review copied to clipboard", vim.log.levels.INFO)
+  ai.send_to_clipboard()
 end
 
 return M

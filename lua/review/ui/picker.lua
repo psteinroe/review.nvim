@@ -1,8 +1,69 @@
 -- PR picker for review.nvim
--- Uses vim.ui.select for PR selection
+-- Supports multiple picker backends: native (vim.ui.select), Telescope, fzf-lua
 local M = {}
 
 local utils = require("review.utils")
+
+---@alias Review.PickerBackend "native" | "telescope" | "fzf-lua" | "auto"
+
+---@type Review.PickerBackend
+M.backend = "auto"
+
+---Check if Telescope is available
+---@return boolean
+local function has_telescope()
+  local ok = pcall(require, "telescope")
+  return ok
+end
+
+---Check if fzf-lua is available
+---@return boolean
+local function has_fzf_lua()
+  local ok = pcall(require, "fzf-lua")
+  return ok
+end
+
+---Detect best available picker
+---@return Review.PickerBackend
+local function detect_backend()
+  -- Check config preference first
+  local config = require("review.config")
+  local preferred = config.get("picker.backend")
+  if preferred and preferred ~= "auto" then
+    -- Validate the preference
+    if preferred == "telescope" and has_telescope() then
+      return "telescope"
+    elseif preferred == "fzf-lua" and has_fzf_lua() then
+      return "fzf-lua"
+    elseif preferred == "native" then
+      return "native"
+    end
+  end
+
+  -- Auto-detect: prefer Telescope, then fzf-lua, then native
+  if has_telescope() then
+    return "telescope"
+  elseif has_fzf_lua() then
+    return "fzf-lua"
+  else
+    return "native"
+  end
+end
+
+---Get the active backend
+---@return Review.PickerBackend
+function M.get_backend()
+  if M.backend == "auto" then
+    return detect_backend()
+  end
+  return M.backend
+end
+
+---Set the picker backend
+---@param backend Review.PickerBackend
+function M.set_backend(backend)
+  M.backend = backend
+end
 
 ---@class Review.PickerItem
 ---@field pr Review.PR The PR data
@@ -89,14 +150,9 @@ function M.build_items(prs, detailed)
   return items
 end
 
----Show picker for PRs
+---Show picker using native vim.ui.select
 ---@param opts {prs: Review.PR[], prompt: string, detailed?: boolean, on_select: fun(pr: Review.PR)}
-function M.show(opts)
-  if not opts.prs or #opts.prs == 0 then
-    vim.notify("No PRs to select from", vim.log.levels.INFO)
-    return
-  end
-
+local function show_native(opts)
   local items = M.build_items(opts.prs, opts.detailed)
 
   vim.ui.select(items, {
@@ -109,6 +165,98 @@ function M.show(opts)
       opts.on_select(choice.pr)
     end
   end)
+end
+
+---Show picker using Telescope
+---@param opts {prs: Review.PR[], prompt: string, detailed?: boolean, on_select: fun(pr: Review.PR)}
+local function show_telescope(opts)
+  local pickers = require("telescope.pickers")
+  local finders = require("telescope.finders")
+  local conf = require("telescope.config").values
+  local actions = require("telescope.actions")
+  local action_state = require("telescope.actions.state")
+
+  local items = M.build_items(opts.prs, opts.detailed)
+
+  pickers
+    .new({}, {
+      prompt_title = opts.prompt or "Select PR",
+      finder = finders.new_table({
+        results = items,
+        entry_maker = function(item)
+          return {
+            value = item,
+            display = item.display,
+            ordinal = item.display,
+          }
+        end,
+      }),
+      sorter = conf.generic_sorter({}),
+      attach_mappings = function(prompt_bufnr, map)
+        actions.select_default:replace(function()
+          actions.close(prompt_bufnr)
+          local selection = action_state.get_selected_entry()
+          if selection and opts.on_select then
+            opts.on_select(selection.value.pr)
+          end
+        end)
+        return true
+      end,
+    })
+    :find()
+end
+
+---Show picker using fzf-lua
+---@param opts {prs: Review.PR[], prompt: string, detailed?: boolean, on_select: fun(pr: Review.PR)}
+local function show_fzf_lua(opts)
+  local fzf = require("fzf-lua")
+
+  local items = M.build_items(opts.prs, opts.detailed)
+
+  -- Build display strings and lookup table
+  local entries = {}
+  local lookup = {}
+  for _, item in ipairs(items) do
+    table.insert(entries, item.display)
+    lookup[item.display] = item.pr
+  end
+
+  fzf.fzf_exec(entries, {
+    prompt = (opts.prompt or "Select PR") .. "> ",
+    actions = {
+      ["default"] = function(selected)
+        if selected and selected[1] and opts.on_select then
+          local pr = lookup[selected[1]]
+          if pr then
+            opts.on_select(pr)
+          end
+        end
+      end,
+    },
+    winopts = {
+      height = 0.6,
+      width = 0.8,
+    },
+  })
+end
+
+---Show picker for PRs
+---@param opts {prs: Review.PR[], prompt: string, detailed?: boolean, on_select: fun(pr: Review.PR)}
+function M.show(opts)
+  if not opts.prs or #opts.prs == 0 then
+    vim.notify("No PRs to select from", vim.log.levels.INFO)
+    return
+  end
+
+  local backend = M.get_backend()
+
+  if backend == "telescope" and has_telescope() then
+    show_telescope(opts)
+  elseif backend == "fzf-lua" and has_fzf_lua() then
+    show_fzf_lua(opts)
+  else
+    show_native(opts)
+  end
 end
 
 ---Show PR picker for review requests
@@ -296,6 +444,169 @@ function M.search(search, prompt)
       require("review").open_pr(pr.number)
     end,
   })
+end
+
+---Pick a file from the review file list using fuzzy finder
+---@param opts? {on_select?: fun(file: Review.File)}
+function M.pick_file(opts)
+  opts = opts or {}
+  local state = require("review.core.state")
+
+  if not state.is_active() then
+    vim.notify("No active review session", vim.log.levels.WARN)
+    return
+  end
+
+  local files = state.state.files
+  if #files == 0 then
+    vim.notify("No files in review", vim.log.levels.INFO)
+    return
+  end
+
+  -- Build items for picker
+  local items = {}
+  for _, file in ipairs(files) do
+    local status_icons = {
+      added = "A",
+      modified = "M",
+      deleted = "D",
+      renamed = "R",
+    }
+    local status = status_icons[file.status] or "?"
+    local reviewed = file.reviewed and "✓" or "·"
+    local comment_count, has_pending = state.get_file_comment_info(file.path)
+    local comments = ""
+    if comment_count > 0 then
+      comments = string.format(" [%d%s]", comment_count, has_pending and "*" or "")
+    end
+
+    table.insert(items, {
+      file = file,
+      display = string.format("%s %s %s%s", reviewed, status, file.path, comments),
+    })
+  end
+
+  local backend = M.get_backend()
+
+  if backend == "telescope" and has_telescope() then
+    M.pick_file_telescope(items, opts)
+  elseif backend == "fzf-lua" and has_fzf_lua() then
+    M.pick_file_fzf_lua(items, opts)
+  else
+    M.pick_file_native(items, opts)
+  end
+end
+
+---Pick file using telescope
+---@param items table[]
+---@param opts {on_select?: fun(file: Review.File)}
+function M.pick_file_telescope(items, opts)
+  local pickers = require("telescope.pickers")
+  local finders = require("telescope.finders")
+  local conf = require("telescope.config").values
+  local actions = require("telescope.actions")
+  local action_state = require("telescope.actions.state")
+
+  pickers
+    .new({}, {
+      prompt_title = "Review Files",
+      finder = finders.new_table({
+        results = items,
+        entry_maker = function(item)
+          return {
+            value = item,
+            display = item.display,
+            ordinal = item.file.path, -- Match on path for fuzzy finding
+          }
+        end,
+      }),
+      sorter = conf.generic_sorter({}),
+      attach_mappings = function(prompt_bufnr, map)
+        actions.select_default:replace(function()
+          actions.close(prompt_bufnr)
+          local selection = action_state.get_selected_entry()
+          if selection then
+            local file = selection.value.file
+            if opts.on_select then
+              opts.on_select(file)
+            else
+              -- Default: open file in diff view
+              local file_tree = require("review.ui.file_tree")
+              local diff = require("review.ui.diff")
+              file_tree.select_by_path(file.path)
+              diff.open_file(file.path)
+              file_tree.render()
+            end
+          end
+        end)
+        return true
+      end,
+    })
+    :find()
+end
+
+---Pick file using fzf-lua
+---@param items table[]
+---@param opts {on_select?: fun(file: Review.File)}
+function M.pick_file_fzf_lua(items, opts)
+  local fzf = require("fzf-lua")
+
+  local entries = {}
+  local lookup = {}
+  for _, item in ipairs(items) do
+    table.insert(entries, item.display)
+    lookup[item.display] = item.file
+  end
+
+  fzf.fzf_exec(entries, {
+    prompt = "Review Files> ",
+    actions = {
+      ["default"] = function(selected)
+        if selected and selected[1] then
+          local file = lookup[selected[1]]
+          if file then
+            if opts.on_select then
+              opts.on_select(file)
+            else
+              local file_tree = require("review.ui.file_tree")
+              local diff = require("review.ui.diff")
+              file_tree.select_by_path(file.path)
+              diff.open_file(file.path)
+              file_tree.render()
+            end
+          end
+        end
+      end,
+    },
+    winopts = {
+      height = 0.6,
+      width = 0.8,
+    },
+  })
+end
+
+---Pick file using native vim.ui.select
+---@param items table[]
+---@param opts {on_select?: fun(file: Review.File)}
+function M.pick_file_native(items, opts)
+  vim.ui.select(items, {
+    prompt = "Select file:",
+    format_item = function(item)
+      return item.display
+    end,
+  }, function(choice)
+    if choice then
+      if opts.on_select then
+        opts.on_select(choice.file)
+      else
+        local file_tree = require("review.ui.file_tree")
+        local diff = require("review.ui.diff")
+        file_tree.select_by_path(choice.file.path)
+        diff.open_file(choice.file.path)
+        file_tree.render()
+      end
+    end
+  end)
 end
 
 ---Prompt user for PR number input

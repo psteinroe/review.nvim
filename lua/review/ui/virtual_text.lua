@@ -34,6 +34,13 @@ end
 ---@param comment Review.Comment
 ---@return string
 function M.get_icon(comment)
+  -- AI processing takes priority
+  if comment.status == "ai_processing" then
+    return "🤖"
+  end
+  if comment.status == "ai_complete" then
+    return "✅"
+  end
   if comment.resolved then
     return "✓"
   end
@@ -53,6 +60,13 @@ end
 ---@param comment Review.Comment
 ---@return string
 function M.get_highlight(comment)
+  -- AI processing takes priority
+  if comment.status == "ai_processing" then
+    return "ReviewVirtualAI"
+  end
+  if comment.status == "ai_complete" then
+    return "ReviewVirtualResolved"
+  end
   if comment.resolved then
     return "ReviewVirtualResolved"
   end
@@ -215,15 +229,24 @@ function M.refresh_buffer(buf, file)
   end
 end
 
----Refresh virtual text in the current buffer
+---Refresh virtual text in the diff buffer(s)
 function M.refresh()
-  local buf = vim.api.nvim_get_current_buf()
   local file = state.state.current_file
   if not file then
     return
   end
 
-  M.refresh_buffer(buf, file)
+  -- Try to get the diff buffer from layout
+  local diff_buf = state.state.layout.diff_buf
+  if diff_buf and vim.api.nvim_buf_is_valid(diff_buf) then
+    M.refresh_buffer(diff_buf, file)
+  end
+
+  -- Also refresh current buffer if different
+  local current_buf = vim.api.nvim_get_current_buf()
+  if current_buf ~= diff_buf and vim.api.nvim_buf_is_valid(current_buf) then
+    M.refresh_buffer(current_buf, file)
+  end
 end
 
 ---Get all extmarks in a buffer

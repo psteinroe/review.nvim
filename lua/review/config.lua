@@ -12,6 +12,7 @@ local M = {}
 ---@field comment_suggestion string Sign for suggestion comments
 ---@field comment_praise string Sign for praise comments
 ---@field comment_resolved string Sign for resolved comments
+---@field comment_ai_processing string Sign for comments being processed by AI
 
 ---@class Review.KeymapsConfig
 ---@field enabled boolean Whether to set up default keymaps
@@ -19,21 +20,25 @@ local M = {}
 ---@class Review.GithubConfig
 ---@field enabled boolean Whether GitHub integration is enabled
 
----@class Review.AITerminalConfig
----@field height number Terminal split height
----@field position "bottom" | "right" Terminal position
-
 ---@class Review.AIConfig
----@field provider "auto" | "opencode" | "claude" | "codex" | "aider" | "avante" | "clipboard" | "custom"
----@field preference string[] Provider preference order for auto-detection
----@field instructions? string Custom instructions (replaces default)
----@field custom_handler? fun(prompt: string, opts: table) Custom handler for "custom" provider
----@field terminal Review.AITerminalConfig Terminal settings
+---@field provider "auto" | "opencode" | "claude" | "codex" | "custom" AI provider
+---@field command? string Custom command with $PROMPT placeholder
+---@field auto_reload boolean Auto-reload buffers when files change
+---@field on_complete? fun() Callback when AI finishes
 
 ---@class Review.VirtualTextConfig
 ---@field enabled boolean Whether virtual text is enabled
 ---@field max_length number Maximum length of preview text
 ---@field position "eol" | "overlay" | "right_align" Position of virtual text
+
+---@class Review.PickerConfig
+---@field backend "auto" | "native" | "telescope" | "fzf-lua" Picker backend
+---@field detailed boolean Whether to show detailed PR info in picker
+
+---@class Review.StorageConfig
+---@field enabled boolean Whether to persist comments to disk
+---@field auto_load boolean Whether to auto-load stored comments on review open
+---@field auto_save boolean Whether to auto-save comments on change
 
 ---@class Review.Config
 ---@field ui Review.UIConfig UI settings
@@ -42,6 +47,8 @@ local M = {}
 ---@field github Review.GithubConfig GitHub settings
 ---@field ai Review.AIConfig AI integration settings
 ---@field virtual_text Review.VirtualTextConfig Virtual text settings
+---@field picker Review.PickerConfig Picker settings
+---@field storage Review.StorageConfig Storage settings
 
 ---@type Review.Config
 M.defaults = {
@@ -60,6 +67,7 @@ M.defaults = {
     comment_suggestion = "*",
     comment_praise = "+",
     comment_resolved = "R",
+    comment_ai_processing = "●",
   },
 
   -- Keymaps (can be overridden)
@@ -74,30 +82,18 @@ M.defaults = {
 
   -- AI settings
   ai = {
-    -- Provider selection: "auto", "opencode", "claude", "codex", "aider", "avante", "clipboard", "custom"
+    -- Provider: "auto" (detect), "opencode", "claude", "codex", "custom"
     provider = "auto",
 
-    -- Provider preference order for auto-detection
-    preference = {
-      "opencode",
-      "avante",
-      "claude",
-      "codex",
-      "aider",
-      "clipboard",
-    },
+    -- Custom command with $PROMPT placeholder (for "custom" provider)
+    -- Example: "my-ai-tool --prompt $PROMPT"
+    command = nil,
 
-    -- Custom instructions (replaces default)
-    instructions = nil,
+    -- Auto-reload buffers when files change
+    auto_reload = true,
 
-    -- Custom handler function for "custom" provider
-    custom_handler = nil,
-
-    -- Terminal settings
-    terminal = {
-      height = 15,
-      position = "bottom",
-    },
+    -- Callback when AI finishes (optional)
+    on_complete = nil,
   },
 
   -- Virtual text settings
@@ -105,6 +101,24 @@ M.defaults = {
     enabled = true,
     max_length = 40,
     position = "eol",
+  },
+
+  -- Picker settings
+  picker = {
+    -- Picker backend: "auto" (detect), "native" (vim.ui.select), "telescope", "fzf-lua"
+    backend = "auto",
+    -- Show detailed PR info in picker
+    detailed = true,
+  },
+
+  -- Storage settings
+  storage = {
+    -- Persist comments to disk
+    enabled = true,
+    -- Auto-load stored comments when opening a review
+    auto_load = true,
+    -- Auto-save comments when they change
+    auto_save = true,
   },
 }
 

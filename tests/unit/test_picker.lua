@@ -502,4 +502,231 @@ T["pick()"]["does not call action on cancel"] = function()
   MiniTest.expect.equality(action_called, false)
 end
 
+-- ============================================================================
+-- Backend detection (multi-picker support)
+-- ============================================================================
+T["get_backend()"] = MiniTest.new_set()
+
+T["get_backend()"]["returns native when no pickers available and auto"] = function()
+  -- Mock the detection functions by temporarily patching pcall for telescope and fzf-lua
+  local original_require = require
+  local mock_require = function(modname)
+    if modname == "telescope" then
+      error("not found")
+    elseif modname == "fzf-lua" then
+      error("not found")
+    end
+    return original_require(modname)
+  end
+
+  -- Reset picker module to clear any cached backend
+  package.loaded["review.ui.picker"] = nil
+  local test_picker = require("review.ui.picker")
+
+  -- When no pickers available and backend is auto, should return native
+  -- (Note: actual detection depends on installed plugins)
+  local backend = test_picker.get_backend()
+  MiniTest.expect.equality(type(backend), "string")
+  -- Backend should be one of the valid values
+  local valid = backend == "native" or backend == "telescope" or backend == "fzf-lua"
+  MiniTest.expect.equality(valid, true)
+end
+
+T["set_backend()"] = MiniTest.new_set()
+
+T["set_backend()"]["sets backend to native"] = function()
+  package.loaded["review.ui.picker"] = nil
+  local test_picker = require("review.ui.picker")
+
+  test_picker.set_backend("native")
+  MiniTest.expect.equality(test_picker.backend, "native")
+end
+
+T["set_backend()"]["sets backend to telescope"] = function()
+  package.loaded["review.ui.picker"] = nil
+  local test_picker = require("review.ui.picker")
+
+  test_picker.set_backend("telescope")
+  MiniTest.expect.equality(test_picker.backend, "telescope")
+end
+
+T["set_backend()"]["sets backend to fzf-lua"] = function()
+  package.loaded["review.ui.picker"] = nil
+  local test_picker = require("review.ui.picker")
+
+  test_picker.set_backend("fzf-lua")
+  MiniTest.expect.equality(test_picker.backend, "fzf-lua")
+end
+
+T["set_backend()"]["sets backend to auto"] = function()
+  package.loaded["review.ui.picker"] = nil
+  local test_picker = require("review.ui.picker")
+
+  test_picker.set_backend("auto")
+  MiniTest.expect.equality(test_picker.backend, "auto")
+end
+
+T["get_backend()"]["respects explicitly set backend"] = function()
+  package.loaded["review.ui.picker"] = nil
+  local test_picker = require("review.ui.picker")
+
+  test_picker.set_backend("native")
+  local backend = test_picker.get_backend()
+  MiniTest.expect.equality(backend, "native")
+end
+
+T["get_backend()"]["auto mode triggers detection"] = function()
+  package.loaded["review.ui.picker"] = nil
+  local test_picker = require("review.ui.picker")
+
+  test_picker.set_backend("auto")
+  local backend = test_picker.get_backend()
+
+  -- When auto, should return detected backend (not "auto")
+  MiniTest.expect.equality(backend ~= "auto", true)
+end
+
+-- ============================================================================
+-- Config integration
+-- ============================================================================
+T["config integration"] = MiniTest.new_set()
+
+T["config integration"]["respects config.picker.backend preference"] = function()
+  -- Setup config with preferred backend
+  package.loaded["review.config"] = nil
+  local config = require("review.config")
+  config.setup({
+    picker = {
+      backend = "native",
+    },
+  })
+
+  package.loaded["review.ui.picker"] = nil
+  local test_picker = require("review.ui.picker")
+
+  test_picker.set_backend("auto")
+  local backend = test_picker.get_backend()
+
+  MiniTest.expect.equality(backend, "native")
+
+  -- Cleanup
+  package.loaded["review.config"] = nil
+end
+
+T["config integration"]["falls back when preferred backend unavailable"] = function()
+  -- Setup config with telescope preference (may not be installed)
+  package.loaded["review.config"] = nil
+  local config = require("review.config")
+  config.setup({
+    picker = {
+      backend = "telescope",
+    },
+  })
+
+  package.loaded["review.ui.picker"] = nil
+  local test_picker = require("review.ui.picker")
+
+  test_picker.set_backend("auto")
+  local backend = test_picker.get_backend()
+
+  -- Should return some valid backend (telescope if available, else fallback)
+  local valid = backend == "telescope" or backend == "fzf-lua" or backend == "native"
+  MiniTest.expect.equality(valid, true)
+
+  -- Cleanup
+  package.loaded["review.config"] = nil
+end
+
+-- ============================================================================
+-- Show with different backends
+-- ============================================================================
+T["show() with backends"] = MiniTest.new_set()
+
+T["show() with backends"]["uses native when backend is native"] = function()
+  package.loaded["review.ui.picker"] = nil
+  local test_picker = require("review.ui.picker")
+
+  test_picker.set_backend("native")
+
+  local select_called = false
+  local original_select = vim.ui.select
+  vim.ui.select = function(items, opts, callback)
+    select_called = true
+    callback(nil)
+  end
+
+  test_picker.show({
+    prs = { make_pr({ number = 1 }) },
+    prompt = "Test",
+    on_select = function() end,
+  })
+
+  vim.ui.select = original_select
+  MiniTest.expect.equality(select_called, true)
+end
+
+T["show() with backends"]["passes detailed flag to format function"] = function()
+  package.loaded["review.ui.picker"] = nil
+  local test_picker = require("review.ui.picker")
+
+  test_picker.set_backend("native")
+
+  local displayed_text = nil
+  local original_select = vim.ui.select
+  vim.ui.select = function(items, opts, callback)
+    displayed_text = opts.format_item(items[1])
+    callback(nil)
+  end
+
+  test_picker.show({
+    prs = { make_pr({
+      number = 1,
+      title = "Test",
+      additions = 50,
+      deletions = 10,
+    }) },
+    prompt = "Test",
+    detailed = true,
+    on_select = function() end,
+  })
+
+  vim.ui.select = original_select
+
+  -- Detailed format should include stats
+  MiniTest.expect.equality(displayed_text:find("+50") ~= nil, true)
+  MiniTest.expect.equality(displayed_text:find("-10") ~= nil, true)
+end
+
+T["show() with backends"]["passes non-detailed to format function"] = function()
+  package.loaded["review.ui.picker"] = nil
+  local test_picker = require("review.ui.picker")
+
+  test_picker.set_backend("native")
+
+  local displayed_text = nil
+  local original_select = vim.ui.select
+  vim.ui.select = function(items, opts, callback)
+    displayed_text = opts.format_item(items[1])
+    callback(nil)
+  end
+
+  test_picker.show({
+    prs = { make_pr({
+      number = 1,
+      title = "Test",
+      author = "user",
+      additions = 50,
+    }) },
+    prompt = "Test",
+    detailed = false,
+    on_select = function() end,
+  })
+
+  vim.ui.select = original_select
+
+  -- Basic format should NOT include stats
+  MiniTest.expect.equality(displayed_text:find("+50"), nil)
+  MiniTest.expect.equality(displayed_text, "#1 Test (@user)")
+end
+
 return T

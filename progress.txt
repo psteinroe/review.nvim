@@ -157,8 +157,56 @@
 - [x] test_keymaps.lua: Clear ]c keymap before teardown test to prevent pollution
 - [x] All 949 tests now passing (0 failures)
 
+## 2026-01-26 - Session 2
+
+### Completed This Session
+- [x] Reviewed reference implementations (github-pr-reviewer.nvim, review.nvim-main)
+- [x] lua/review/storage.lua - Comment persistence to disk
+  - Hash-based filenames: {project_hash}-{branch}.json or {project_hash}-pr-{number}.json
+  - Storage location: ~/.local/share/nvim/review/
+  - Filters to only save local comments
+- [x] lua/review/core/line_tracker.lua - Extmark-based position tracking
+  - Tracks comment positions through buffer edits using Neovim extmarks
+  - Syncs comment.line from extmark positions on save
+  - Autocmds for BufWritePost, BufEnter, BufDelete
+- [x] lua/review/export.lua - Dedicated export module (separated from ai.lua)
+  - Formats: markdown, plain text, JSON
+  - Options: include_diff, include_comments, include_pr_info, include_instructions
+  - Preview in split buffer with q to close
+- [x] lua/review/ui/picker.lua - Multi-picker support
+  - Backends: native (vim.ui.select), Telescope, fzf-lua
+  - Auto-detection with config override
+  - Detailed PR formatting with stats and branch info
+- [x] lua/review/integrations/github.lua - Reactions support
+  - REACTION_EMOJIS mapping (+1, -1, laugh, hooray, confused, heart, rocket, eyes)
+  - add_reaction, remove_reaction, toggle_reaction, pick_reaction
+  - Fetch reactions with comment data
+- [x] lua/review/integrations/github.lua - Fork PR support
+  - fetch_fork_info with isCrossRepository check
+  - setup_fork_remote creates fork-{owner} remote
+  - checkout_pr_with_fork_support for seamless fork handling
+  - cleanup_fork_remotes for cleanup
+- [x] lua/review/config.lua - Added picker and storage config
+  - picker: backend (auto/native/telescope/fzf-lua), detailed
+  - storage: enabled, auto_load, auto_save
+
+### Completed This Session (continued)
+- [x] tests/unit/test_storage.lua - Storage tests (25 tests)
+  - save/load round trip, local comments filtering, PR storage, list_stored
+- [x] tests/unit/test_line_tracker.lua - Line tracker tests (28 tests)
+  - track_comment, get_current_line, clear, untrack, has_comment_moved, sync
+- [x] tests/unit/test_export.lua - Export tests (30 tests)
+  - generate_markdown, generate_plain, generate_json, to_clipboard, get_comment_summary
+- [x] tests/unit/test_picker.lua - Added multi-picker tests (14 new tests)
+  - Backend detection, set_backend, get_backend, config integration
+- [x] tests/unit/test_github.lua - Added reactions/fork tests (20 new tests)
+  - REACTION_EMOJIS, REACTION_CONTENTS, format_reactions, fork support functions
+
+### Test Summary
+- All 1051 tests passing (0 failures)
+
 ### Next Steps
-- Implementation complete! All phases done.
+- All implementation tasks complete!
 
 ### Issues/Blockers
 - None

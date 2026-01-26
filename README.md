@@ -130,8 +130,6 @@ All keymaps are active when a review session is open.
 |--------|--------|
 | `<C-j>` | Next file in tree |
 | `<C-k>` | Previous file in tree |
-| `<Tab>` | Open next file |
-| `<S-Tab>` | Open previous file |
 
 #### Comment Navigation
 
@@ -148,8 +146,8 @@ All keymaps are active when a review session is open.
 
 | Keymap | Action |
 |--------|--------|
-| `]h` | Next hunk |
-| `[h` | Previous hunk |
+| `<Tab>` | Next hunk (across files) |
+| `<S-Tab>` | Previous hunk (across files) |
 
 #### Views
 
@@ -192,15 +190,64 @@ All keymaps are active when a review session is open.
 | `<leader>rr` | Pick from review requests |
 | `<leader>rl` | Pick from open PRs |
 
+### File Tree Symbols
+
+Each file in the tree is displayed as: `{reviewed} {status} {path} {comments}`
+
+**Reviewed status (first column):**
+| Symbol | Meaning |
+|--------|---------|
+| `✓` | File reviewed (staged in local mode, viewed in PR mode) |
+| `·` | File pending review |
+
+**Git status (second column):**
+| Symbol | Meaning |
+|--------|---------|
+| `A` | Added (new file) |
+| `M` | Modified |
+| `D` | Deleted |
+| `R` | Renamed |
+
+**Comment count (right-aligned):**
+| Format | Meaning |
+|--------|---------|
+| `3` | 3 comments on this file |
+| `3*` | 3 comments, includes pending (unsent) comments |
+
 ### File Tree Keymaps
 
 When focused on the file tree:
 
 | Keymap | Action |
 |--------|--------|
-| `<CR>` / `o` | Open file |
-| `j` | Next file |
-| `k` | Previous file |
+| `<CR>` / `o` / `l` | Open file |
+| `j` / `<Down>` | Next file |
+| `k` / `<Up>` | Previous file |
+| `<Space>` / `x` / `s` | Toggle reviewed (stages file in local mode) |
+| `<Tab>` | Next hunk (across files) |
+| `<S-Tab>` | Previous hunk (across files) |
+| `R` | Refresh files from git |
+| `q` | Close review |
+| Mouse click | Open file |
+
+### Comment Input Keymaps
+
+When typing a comment in the floating input window:
+
+| Keymap | Action |
+|--------|--------|
+| `<C-s>` | Save comment (insert or normal mode) |
+| `<CR>` | Save comment (normal mode only) |
+| `<C-c>` | Cancel comment |
+
+### Diff View Keymaps
+
+When focused on the diff view:
+
+| Keymap | Action |
+|--------|--------|
+| `<Tab>` | Next hunk (across files) |
+| `<S-Tab>` | Previous hunk (across files) |
 | `q` | Close review |
 
 ## Workflow Examples

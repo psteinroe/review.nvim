@@ -1,4 +1,4 @@
--- Tests for review.ui.file_tree module
+-- Tests for review.ui.file_tree module (flat list implementation)
 local T = MiniTest.new_set()
 
 local file_tree = require("review.ui.file_tree")
@@ -16,6 +16,7 @@ local function create_test_files()
       deletions = 5,
       comment_count = 2,
       hunks = {},
+      reviewed = false,
     },
     {
       path = "src/utils.lua",
@@ -24,6 +25,7 @@ local function create_test_files()
       deletions = 0,
       comment_count = 0,
       hunks = {},
+      reviewed = true,
     },
     {
       path = "tests/test_main.lua",
@@ -32,14 +34,16 @@ local function create_test_files()
       deletions = 2,
       comment_count = 1,
       hunks = {},
+      reviewed = false,
     },
     {
       path = "README.md",
-      status = "modified",
-      additions = 3,
-      deletions = 1,
+      status = "deleted",
+      additions = 0,
+      deletions = 10,
       comment_count = 0,
       hunks = {},
+      reviewed = false,
     },
   }
 end
@@ -69,162 +73,62 @@ local function cleanup()
 end
 
 -- ============================================================================
--- get_status_icon tests
+-- get_status_letter tests
 -- ============================================================================
 
-T["get_status_icon()"] = MiniTest.new_set()
+T["get_status_letter()"] = MiniTest.new_set()
 
-T["get_status_icon()"]["returns + for added files"] = function()
+T["get_status_letter()"]["returns A for added files"] = function()
   config.setup()
-  local icon, hl = file_tree.get_status_icon("added")
-  MiniTest.expect.equality(icon, "+")
+  local letter, hl = file_tree.get_status_letter("added")
+  MiniTest.expect.equality(letter, "A")
   MiniTest.expect.equality(hl, "ReviewTreeAdded")
 end
 
-T["get_status_icon()"]["returns ~ for modified files"] = function()
+T["get_status_letter()"]["returns M for modified files"] = function()
   config.setup()
-  local icon, hl = file_tree.get_status_icon("modified")
-  MiniTest.expect.equality(icon, "~")
+  local letter, hl = file_tree.get_status_letter("modified")
+  MiniTest.expect.equality(letter, "M")
   MiniTest.expect.equality(hl, "ReviewTreeModified")
 end
 
-T["get_status_icon()"]["returns - for deleted files"] = function()
+T["get_status_letter()"]["returns D for deleted files"] = function()
   config.setup()
-  local icon, hl = file_tree.get_status_icon("deleted")
-  MiniTest.expect.equality(icon, "-")
+  local letter, hl = file_tree.get_status_letter("deleted")
+  MiniTest.expect.equality(letter, "D")
   MiniTest.expect.equality(hl, "ReviewTreeDeleted")
 end
 
-T["get_status_icon()"]["returns R for renamed files"] = function()
+T["get_status_letter()"]["returns R for renamed files"] = function()
   config.setup()
-  local icon, hl = file_tree.get_status_icon("renamed")
-  MiniTest.expect.equality(icon, "R")
+  local letter, hl = file_tree.get_status_letter("renamed")
+  MiniTest.expect.equality(letter, "R")
   MiniTest.expect.equality(hl, "ReviewTreeRenamed")
 end
 
-T["get_status_icon()"]["returns ? for unknown status"] = function()
+T["get_status_letter()"]["returns ? for unknown status"] = function()
   config.setup()
-  local icon, hl = file_tree.get_status_icon("unknown")
-  MiniTest.expect.equality(icon, "?")
+  local letter, hl = file_tree.get_status_letter("unknown")
+  MiniTest.expect.equality(letter, "?")
   MiniTest.expect.equality(hl, "ReviewTreeFile")
 end
 
 -- ============================================================================
--- build_tree tests
+-- get_reviewed_icon tests
 -- ============================================================================
 
-T["build_tree()"] = MiniTest.new_set()
+T["get_reviewed_icon()"] = MiniTest.new_set()
 
-T["build_tree()"]["returns empty table for empty files"] = function()
-  local tree = file_tree.build_tree({})
-  MiniTest.expect.equality(vim.tbl_count(tree), 0)
+T["get_reviewed_icon()"]["returns checkmark for reviewed files"] = function()
+  local icon, hl = file_tree.get_reviewed_icon(true)
+  MiniTest.expect.equality(icon, "✓")
+  MiniTest.expect.equality(hl, "ReviewTreeReviewed")
 end
 
-T["build_tree()"]["creates file nodes for flat paths"] = function()
-  local files = {
-    { path = "README.md", status = "modified" },
-    { path = "LICENSE", status = "added" },
-  }
-  local tree = file_tree.build_tree(files)
-  MiniTest.expect.no_equality(tree["README.md"], nil)
-  MiniTest.expect.equality(tree["README.md"].type, "file")
-  MiniTest.expect.no_equality(tree["LICENSE"], nil)
-  MiniTest.expect.equality(tree["LICENSE"].type, "file")
-end
-
-T["build_tree()"]["creates directory nodes for nested paths"] = function()
-  local files = {
-    { path = "src/main.lua", status = "modified" },
-  }
-  local tree = file_tree.build_tree(files)
-  MiniTest.expect.no_equality(tree["src"], nil)
-  MiniTest.expect.equality(tree["src"].type, "dir")
-  MiniTest.expect.no_equality(tree["src"].children["main.lua"], nil)
-  MiniTest.expect.equality(tree["src"].children["main.lua"].type, "file")
-end
-
-T["build_tree()"]["handles multiple files in same directory"] = function()
-  local files = {
-    { path = "src/a.lua", status = "added" },
-    { path = "src/b.lua", status = "modified" },
-  }
-  local tree = file_tree.build_tree(files)
-  MiniTest.expect.equality(tree["src"].type, "dir")
-  MiniTest.expect.no_equality(tree["src"].children["a.lua"], nil)
-  MiniTest.expect.no_equality(tree["src"].children["b.lua"], nil)
-end
-
-T["build_tree()"]["handles deeply nested paths"] = function()
-  local files = {
-    { path = "a/b/c/d/file.lua", status = "modified" },
-  }
-  local tree = file_tree.build_tree(files)
-  MiniTest.expect.equality(tree["a"].type, "dir")
-  MiniTest.expect.equality(tree["a"].children["b"].type, "dir")
-  MiniTest.expect.equality(tree["a"].children["b"].children["c"].type, "dir")
-  MiniTest.expect.equality(tree["a"].children["b"].children["c"].children["d"].type, "dir")
-  MiniTest.expect.equality(tree["a"].children["b"].children["c"].children["d"].children["file.lua"].type, "file")
-end
-
-T["build_tree()"]["stores file data in leaf nodes"] = function()
-  local files = {
-    { path = "test.lua", status = "modified", additions = 10, deletions = 5 },
-  }
-  local tree = file_tree.build_tree(files)
-  MiniTest.expect.equality(tree["test.lua"].data.additions, 10)
-  MiniTest.expect.equality(tree["test.lua"].data.deletions, 5)
-end
-
--- ============================================================================
--- sort_tree_nodes tests
--- ============================================================================
-
-T["sort_tree_nodes()"] = MiniTest.new_set()
-
-T["sort_tree_nodes()"]["puts directories before files"] = function()
-  local tree = {
-    ["file.lua"] = { type = "file" },
-    ["src"] = { type = "dir", children = {} },
-  }
-  local sorted = file_tree.sort_tree_nodes(tree)
-  MiniTest.expect.equality(sorted[1].name, "src")
-  MiniTest.expect.equality(sorted[2].name, "file.lua")
-end
-
-T["sort_tree_nodes()"]["sorts directories alphabetically"] = function()
-  local tree = {
-    ["zeta"] = { type = "dir", children = {} },
-    ["alpha"] = { type = "dir", children = {} },
-  }
-  local sorted = file_tree.sort_tree_nodes(tree)
-  MiniTest.expect.equality(sorted[1].name, "alpha")
-  MiniTest.expect.equality(sorted[2].name, "zeta")
-end
-
-T["sort_tree_nodes()"]["sorts files alphabetically"] = function()
-  local tree = {
-    ["z.lua"] = { type = "file" },
-    ["a.lua"] = { type = "file" },
-  }
-  local sorted = file_tree.sort_tree_nodes(tree)
-  MiniTest.expect.equality(sorted[1].name, "a.lua")
-  MiniTest.expect.equality(sorted[2].name, "z.lua")
-end
-
-T["sort_tree_nodes()"]["handles mixed directories and files"] = function()
-  local tree = {
-    ["z.lua"] = { type = "file" },
-    ["src"] = { type = "dir", children = {} },
-    ["a.lua"] = { type = "file" },
-    ["lib"] = { type = "dir", children = {} },
-  }
-  local sorted = file_tree.sort_tree_nodes(tree)
-  -- Directories first, alphabetically
-  MiniTest.expect.equality(sorted[1].name, "lib")
-  MiniTest.expect.equality(sorted[2].name, "src")
-  -- Then files, alphabetically
-  MiniTest.expect.equality(sorted[3].name, "a.lua")
-  MiniTest.expect.equality(sorted[4].name, "z.lua")
+T["get_reviewed_icon()"]["returns dot for unreviewed files"] = function()
+  local icon, hl = file_tree.get_reviewed_icon(false)
+  MiniTest.expect.equality(icon, "·")
+  MiniTest.expect.equality(hl, "ReviewTreePending")
 end
 
 -- ============================================================================
@@ -243,28 +147,48 @@ T["render_header()"] = MiniTest.new_set({
   },
 })
 
-T["render_header()"]["shows Review for local mode"] = function()
+T["render_header()"]["shows Local mode header"] = function()
+  state.state.mode = "local"
+  state.state.base = "HEAD"
+  state.state.files = create_test_files()
+  local lines, _ = file_tree.render_header()
+  MiniTest.expect.equality(lines[1], "Local • HEAD")
+end
+
+T["render_header()"]["shows PR mode header with PR number"] = function()
+  state.state.mode = "pr"
+  state.state.pr = { number = 123, title = "Test PR", base = "main", branch = "feat/test" }
+  state.state.files = create_test_files()
+  local lines, _ = file_tree.render_header()
+  MiniTest.expect.equality(lines[1], "PR #123")
+end
+
+T["render_header()"]["shows branch info for PR mode"] = function()
+  state.state.mode = "pr"
+  state.state.pr = { number = 123, title = "Test PR", base = "main", branch = "feat/test" }
+  state.state.files = create_test_files()
+  local lines, _ = file_tree.render_header()
+  MiniTest.expect.equality(lines[2], "main ← feat/test")
+end
+
+T["render_header()"]["shows review progress"] = function()
   state.state.mode = "local"
   state.state.files = create_test_files()
   local lines, _ = file_tree.render_header()
-  MiniTest.expect.equality(lines[1], "Review (4 files)")
-end
-
-T["render_header()"]["shows PR info for pr mode"] = function()
-  state.state.mode = "pr"
-  state.state.pr = { number = 123, title = "Test PR" }
-  state.state.files = create_test_files()
-  local lines, _ = file_tree.render_header()
-  MiniTest.expect.equality(lines[1], "PR #123 (4 files)")
+  -- 1 file is reviewed, 4 total
+  MiniTest.expect.equality(lines[2], "1 of 4 reviewed")
 end
 
 T["render_header()"]["includes blank line separator"] = function()
-  state.state.files = {}
+  state.state.mode = "local"
+  state.state.files = create_test_files()
   local lines, _ = file_tree.render_header()
-  MiniTest.expect.equality(lines[2], "")
+  -- Last line should be blank
+  MiniTest.expect.equality(lines[#lines], "")
 end
 
 T["render_header()"]["adds header highlight"] = function()
+  state.state.mode = "local"
   state.state.files = {}
   local _, highlights = file_tree.render_header()
   MiniTest.expect.equality(highlights[1].hl_group, "ReviewTreeHeader")
@@ -287,7 +211,7 @@ T["render_footer()"] = MiniTest.new_set({
   },
 })
 
-T["render_footer()"]["shows comment counts"] = function()
+T["render_footer()"]["shows pending count"] = function()
   state.state.comments = {
     { id = "1", kind = "review", body = "test" },
     { id = "2", kind = "review", body = "test2" },
@@ -296,36 +220,99 @@ T["render_footer()"]["shows comment counts"] = function()
   local lines, _ = file_tree.render_footer()
   -- First line is blank separator
   MiniTest.expect.equality(lines[1], "")
-  -- Contains comment count
-  local found_comments = false
+  -- Find line with pending count
   local found_pending = false
   for _, line in ipairs(lines) do
-    if line:match("2 comments") then
-      found_comments = true
-    end
     if line:match("1 pending") then
       found_pending = true
     end
   end
-  MiniTest.expect.equality(found_comments, true)
   MiniTest.expect.equality(found_pending, true)
 end
 
-T["render_footer()"]["shows zero counts when no comments"] = function()
-  state.state.comments = {}
+T["render_footer()"]["shows thread count in PR mode"] = function()
+  state.state.mode = "pr"
+  state.state.comments = {
+    { id = "1", kind = "review", body = "test" },
+    { id = "2", kind = "review", body = "test2" },
+    { id = "3", kind = "conversation", body = "test3" },
+  }
   local lines, _ = file_tree.render_footer()
-  local found_zero_comments = false
-  local found_zero_pending = false
+  local found_threads = false
   for _, line in ipairs(lines) do
-    if line:match("0 comments") then
-      found_zero_comments = true
-    end
-    if line:match("0 pending") then
-      found_zero_pending = true
+    if line:match("3 threads") then
+      found_threads = true
     end
   end
-  MiniTest.expect.equality(found_zero_comments, true)
-  MiniTest.expect.equality(found_zero_pending, true)
+  MiniTest.expect.equality(found_threads, true)
+end
+
+T["render_footer()"]["is empty when no comments"] = function()
+  state.state.mode = "local"
+  state.state.comments = {}
+  local lines, _ = file_tree.render_footer()
+  -- Only blank line, no footer content
+  MiniTest.expect.equality(#lines, 1)
+  MiniTest.expect.equality(lines[1], "")
+end
+
+-- ============================================================================
+-- render_file_line tests
+-- ============================================================================
+
+T["render_file_line()"] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      config.setup()
+      state.reset()
+    end,
+    post_case = function()
+      state.reset()
+    end,
+  },
+})
+
+T["render_file_line()"]["includes reviewed icon"] = function()
+  local file = { path = "test.lua", status = "modified", reviewed = true }
+  local line, _ = file_tree.render_file_line(file, 1, 50)
+  MiniTest.expect.equality(line:match("✓") ~= nil, true)
+end
+
+T["render_file_line()"]["includes unreviewed icon"] = function()
+  local file = { path = "test.lua", status = "modified", reviewed = false }
+  local line, _ = file_tree.render_file_line(file, 1, 50)
+  MiniTest.expect.equality(line:match("·") ~= nil, true)
+end
+
+T["render_file_line()"]["includes status letter"] = function()
+  local file = { path = "test.lua", status = "added", reviewed = false }
+  local line, _ = file_tree.render_file_line(file, 1, 50)
+  MiniTest.expect.equality(line:match("A") ~= nil, true)
+end
+
+T["render_file_line()"]["includes file path"] = function()
+  local file = { path = "src/test.lua", status = "modified", reviewed = false }
+  local line, _ = file_tree.render_file_line(file, 1, 50)
+  MiniTest.expect.equality(line:match("src/test.lua") ~= nil, true)
+end
+
+T["render_file_line()"]["includes comment count"] = function()
+  state.state.comments = {
+    { id = "1", file = "test.lua", kind = "review", body = "test" },
+    { id = "2", file = "test.lua", kind = "review", body = "test2" },
+  }
+  local file = { path = "test.lua", status = "modified", reviewed = false }
+  local line, _ = file_tree.render_file_line(file, 1, 50)
+  MiniTest.expect.equality(line:match("2") ~= nil, true)
+end
+
+T["render_file_line()"]["shows asterisk for pending comments"] = function()
+  state.state.comments = {
+    { id = "1", file = "test.lua", kind = "local", body = "pending", status = "pending" },
+  }
+  local file = { path = "test.lua", status = "modified", reviewed = false }
+  local line, _ = file_tree.render_file_line(file, 1, 50)
+  MiniTest.expect.equality(line:match("1%*") ~= nil, true)
 end
 
 -- ============================================================================
@@ -469,11 +456,12 @@ T["render()"]["populates buffer with content"] = function()
   MiniTest.expect.equality(#lines > 0, true)
 end
 
-T["render()"]["includes header line"] = function()
+T["render()"]["includes header line with Local"] = function()
+  state.state.mode = "local"
   file_tree.render()
   local buf = state.state.layout.file_tree_buf
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  MiniTest.expect.equality(lines[1]:match("Review"), "Review")
+  MiniTest.expect.equality(lines[1]:match("Local") ~= nil, true)
 end
 
 T["render()"]["includes file names"] = function()
@@ -485,7 +473,7 @@ T["render()"]["includes file names"] = function()
   MiniTest.expect.equality(content:match("utils.lua") ~= nil, true)
 end
 
-T["render()"]["includes directory names"] = function()
+T["render()"]["includes directory paths"] = function()
   file_tree.render()
   local buf = state.state.layout.file_tree_buf
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
@@ -494,14 +482,28 @@ T["render()"]["includes directory names"] = function()
   MiniTest.expect.equality(content:match("tests/") ~= nil, true)
 end
 
-T["render()"]["includes comment counts"] = function()
-  state.state.files[1].comment_count = 3
+T["render()"]["includes status letters"] = function()
   file_tree.render()
   local buf = state.state.layout.file_tree_buf
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local content = table.concat(lines, "\n")
-  -- Should contain comment indicator
-  MiniTest.expect.equality(content:match("#3") ~= nil or content:match("3") ~= nil, true)
+  -- Should have M for modified, A for added, D for deleted
+  MiniTest.expect.equality(content:match(" M ") ~= nil, true)
+  MiniTest.expect.equality(content:match(" A ") ~= nil, true)
+  MiniTest.expect.equality(content:match(" D ") ~= nil, true)
+end
+
+T["render()"]["includes reviewed icons"] = function()
+  -- Use PR mode to avoid sync_reviewed_with_staged resetting reviewed status
+  state.state.mode = "pr"
+  state.state.pr = { number = 1, base = "main", branch = "test" }
+  file_tree.render()
+  local buf = state.state.layout.file_tree_buf
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local content = table.concat(lines, "\n")
+  -- Should have ✓ for reviewed and · for unreviewed
+  MiniTest.expect.equality(content:match("✓") ~= nil, true)
+  MiniTest.expect.equality(content:match("·") ~= nil, true)
 end
 
 T["render()"]["sets buffer to non-modifiable"] = function()
@@ -561,6 +563,7 @@ T["init()"]["sets up keymaps"] = function()
   local keymaps = vim.api.nvim_buf_get_keymap(buf, "n")
   local has_j = false
   local has_cr = false
+  local has_space = false
   for _, km in ipairs(keymaps) do
     if km.lhs == "j" then
       has_j = true
@@ -568,9 +571,13 @@ T["init()"]["sets up keymaps"] = function()
     if km.lhs == "<CR>" then
       has_cr = true
     end
+    if km.lhs == "<Space>" or km.lhs == " " then
+      has_space = true
+    end
   end
   MiniTest.expect.equality(has_j, true)
   MiniTest.expect.equality(has_cr, true)
+  MiniTest.expect.equality(has_space, true)
 end
 
 -- ============================================================================
@@ -584,8 +591,21 @@ T["open_selected()"] = MiniTest.new_set({
       state.reset()
       state.state.files = create_test_files()
       file_tree.reset()
+      -- Mock the diff module's open_file to succeed
+      local diff = require("review.ui.diff")
+      diff._original_open_file = diff.open_file
+      diff.open_file = function(path)
+        state.set_current_file(path)
+        return true
+      end
     end,
     post_case = function()
+      -- Restore original open_file
+      local diff = require("review.ui.diff")
+      if diff._original_open_file then
+        diff.open_file = diff._original_open_file
+        diff._original_open_file = nil
+      end
       state.reset()
       file_tree.reset()
     end,
@@ -622,6 +642,49 @@ T["open_selected()"]["calls on_file_select callback if configured"] = function()
   file_tree.open_selected()
   MiniTest.expect.no_equality(called_with, nil)
   MiniTest.expect.equality(called_with.path, "src/main.lua")
+end
+
+-- ============================================================================
+-- toggle_reviewed tests
+-- ============================================================================
+
+T["toggle_reviewed()"] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      config.setup()
+      state.reset()
+      state.state.mode = "pr" -- Use PR mode to avoid git operations
+      state.state.files = create_test_files()
+      file_tree.reset()
+    end,
+    post_case = function()
+      state.reset()
+      file_tree.reset()
+    end,
+  },
+})
+
+T["toggle_reviewed()"]["toggles reviewed status in state"] = function()
+  file_tree.set_selected_idx(1) -- src/main.lua, reviewed = false
+  local file_before = file_tree.get_selected_file()
+  MiniTest.expect.equality(file_before.reviewed, false)
+
+  file_tree.toggle_reviewed()
+
+  local file_after = file_tree.get_selected_file()
+  MiniTest.expect.equality(file_after.reviewed, true)
+end
+
+T["toggle_reviewed()"]["returns new status"] = function()
+  file_tree.set_selected_idx(1) -- reviewed = false
+  local new_status = file_tree.toggle_reviewed()
+  MiniTest.expect.equality(new_status, true)
+end
+
+T["toggle_reviewed()"]["returns nil when no file selected"] = function()
+  state.state.files = {}
+  local result = file_tree.toggle_reviewed()
+  MiniTest.expect.equality(result, nil)
 end
 
 return T

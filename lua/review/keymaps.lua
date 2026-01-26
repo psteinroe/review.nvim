@@ -35,6 +35,7 @@ local utils = require("review.utils")
 ---@field add_conversation string Add conversation comment
 ---@field send_to_ai string Send to AI
 ---@field pick_ai_provider string Pick AI provider
+---@field ai_cancel string Cancel AI job
 ---@field send_to_clipboard string Copy to clipboard
 ---@field submit_to_github string Submit to GitHub
 ---@field approve string Approve PR
@@ -82,6 +83,7 @@ M.defaults = {
   add_conversation = "<leader>rC",
   send_to_ai = "<leader>rs",
   pick_ai_provider = "<leader>rS",
+  ai_cancel = "<leader>rX",
   send_to_clipboard = "<leader>ry",
   submit_to_github = "<leader>rg",
   approve = "<leader>ra",
@@ -132,32 +134,83 @@ local function when_in_diff(fn)
   end
 end
 
----Add a comment at cursor with specified type
+---Add a comment at cursor or selection with specified type
 ---@param comment_type "note" | "issue" | "suggestion" | "praise"
-local function add_comment(comment_type)
+---@param start_line? number Start line (for visual selection)
+---@param end_line? number End line (for visual selection)
+local function add_comment(comment_type, start_line, end_line)
   local current_file = state.state.current_file
   if not current_file then
     vim.notify("No file open", vim.log.levels.WARN)
     return
   end
 
-  local line = vim.api.nvim_win_get_cursor(0)[1]
+  -- If no range provided, use cursor line
+  if not start_line then
+    start_line = vim.api.nvim_win_get_cursor(0)[1]
+  end
+  if not end_line then
+    end_line = start_line
+  end
+
+  -- Ensure start <= end
+  if start_line > end_line then
+    start_line, end_line = end_line, start_line
+  end
+
+  local original_win = vim.api.nvim_get_current_win()
   local float = utils.safe_require("review.ui.float")
   local comments = require("review.core.comments")
 
+  local is_multiline = start_line ~= end_line
+  local line_info = is_multiline
+    and string.format("lines %d-%d", start_line, end_line)
+    or string.format("line %d", start_line)
+
   if float then
     float.multiline_input({
-      prompt = "Comment (" .. comment_type .. ")",
+      prompt = string.format("Comment (%s) %s", comment_type, line_info),
+      file = current_file,
+      line = start_line,
+      filetype = "markdown",
     }, function(lines)
       if lines and #lines > 0 then
         local body = table.concat(lines, "\n")
-        comments.add(current_file, line, body, comment_type)
-        -- Refresh UI
-        M.refresh_ui()
-        vim.notify(string.format("Added %s comment at line %d", comment_type, line), vim.log.levels.INFO)
+        if is_multiline then
+          comments.add_multiline(current_file, start_line, end_line, body, comment_type)
+        else
+          comments.add(current_file, start_line, body, comment_type)
+        end
+        vim.schedule(function()
+          M.refresh_ui()
+          -- Restore cursor to comment line
+          if vim.api.nvim_win_is_valid(original_win) then
+            vim.api.nvim_set_current_win(original_win)
+            pcall(vim.api.nvim_win_set_cursor, original_win, { start_line, 0 })
+          end
+          vim.notify(string.format("Added %s comment at %s", comment_type, line_info), vim.log.levels.INFO)
+        end)
       end
     end)
   end
+end
+
+---Add comment from visual selection
+---@param comment_type "note" | "issue" | "suggestion" | "praise"
+local function add_comment_visual(comment_type)
+  -- Exit visual mode first to set '< and '> marks
+  vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
+  -- Schedule to ensure marks are set after exiting visual mode
+  vim.schedule(function()
+    local start_line = vim.fn.line("'<")
+    local end_line = vim.fn.line("'>")
+    -- Validate lines
+    if start_line < 1 or end_line < 1 then
+      vim.notify("Invalid selection", vim.log.levels.WARN)
+      return
+    end
+    add_comment(comment_type, start_line, end_line)
+  end)
 end
 
 ---Edit comment at cursor
@@ -404,7 +457,7 @@ function M.setup()
     { "n", keymaps.focus_tree, when_active(layout.focus_tree), "Review: Focus tree" },
     { "n", keymaps.focus_diff, when_active(layout.focus_diff), "Review: Focus diff" },
 
-    -- Comment actions
+    -- Comment actions (normal mode)
     {
       "n",
       keymaps.add_comment,
@@ -437,6 +490,47 @@ function M.setup()
       end),
       "Review: Add praise",
     },
+    -- Comment actions (visual mode - for multi-line selections)
+    {
+      "v",
+      keymaps.add_comment,
+      function()
+        if state.is_active() then
+          add_comment_visual("note")
+        end
+      end,
+      "Review: Add comment (selection)",
+    },
+    {
+      "v",
+      keymaps.add_issue,
+      function()
+        if state.is_active() then
+          add_comment_visual("issue")
+        end
+      end,
+      "Review: Add issue (selection)",
+    },
+    {
+      "v",
+      keymaps.add_suggestion,
+      function()
+        if state.is_active() then
+          add_comment_visual("suggestion")
+        end
+      end,
+      "Review: Add suggestion (selection)",
+    },
+    {
+      "v",
+      keymaps.add_praise,
+      function()
+        if state.is_active() then
+          add_comment_visual("praise")
+        end
+      end,
+      "Review: Add praise (selection)",
+    },
     { "n", keymaps.edit_comment, when_active(edit_comment_at_cursor), "Review: Edit comment" },
     { "n", keymaps.delete_comment, when_active(delete_comment_at_cursor), "Review: Delete comment" },
     { "n", keymaps.show_comment, when_active(show_comment_at_cursor), "Review: Show comment" },
@@ -456,7 +550,8 @@ function M.setup()
       "n",
       keymaps.send_to_ai,
       when_active(function()
-        vim.notify("AI integration not yet implemented", vim.log.levels.INFO)
+        local ai = require("review.integrations.ai")
+        ai.send_with_prompt()
       end),
       "Review: Send to AI",
     },
@@ -464,18 +559,26 @@ function M.setup()
       "n",
       keymaps.pick_ai_provider,
       when_active(function()
-        vim.notify("AI provider picker not yet implemented", vim.log.levels.INFO)
+        local ai = require("review.integrations.ai")
+        ai.pick_provider()
       end),
       "Review: Pick AI provider",
     },
     {
       "n",
+      keymaps.ai_cancel,
+      when_active(function()
+        local ai = require("review.integrations.ai")
+        ai.cancel()
+      end),
+      "Review: Cancel AI job",
+    },
+    {
+      "n",
       keymaps.send_to_clipboard,
       when_active(function()
-        local commands = utils.safe_require("review.commands")
-        if commands then
-          commands.send_to_clipboard()
-        end
+        local ai = require("review.integrations.ai")
+        ai.send_to_clipboard()
       end),
       "Review: Copy to clipboard",
     },
@@ -567,6 +670,7 @@ function M.teardown()
     keymaps.add_conversation,
     keymaps.send_to_ai,
     keymaps.pick_ai_provider,
+    keymaps.ai_cancel,
     keymaps.send_to_clipboard,
     keymaps.submit_to_github,
     keymaps.approve,
@@ -577,6 +681,17 @@ function M.teardown()
 
   for _, lhs in ipairs(all_keys) do
     restore_original("n", lhs)
+  end
+
+  -- Also restore visual mode comment keymaps
+  local visual_keys = {
+    keymaps.add_comment,
+    keymaps.add_issue,
+    keymaps.add_suggestion,
+    keymaps.add_praise,
+  }
+  for _, lhs in ipairs(visual_keys) do
+    restore_original("v", lhs)
   end
 
   -- Clear augroup
@@ -677,6 +792,7 @@ function M.get_all_definitions()
       { key = keymaps.add_conversation, desc = "Add conversation comment" },
       { key = keymaps.send_to_ai, desc = "Send to AI" },
       { key = keymaps.pick_ai_provider, desc = "Pick AI provider" },
+      { key = keymaps.ai_cancel, desc = "Cancel AI job" },
       { key = keymaps.send_to_clipboard, desc = "Copy to clipboard" },
       { key = keymaps.submit_to_github, desc = "Submit to GitHub" },
       { key = keymaps.approve, desc = "Approve PR" },

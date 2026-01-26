@@ -55,8 +55,8 @@ function M.open(opts)
   M.setup_autocmds()
 end
 
----Close review layout
-function M.close()
+---Close review layout (internal, no confirmation)
+function M.close_internal()
   local layout = state.state.layout
 
   -- Close panel if open
@@ -95,6 +95,31 @@ function M.close()
   end
 
   state.reset()
+end
+
+---Close review layout with confirmation if there are pending comments
+---@param opts? {force?: boolean} Options - force=true skips confirmation
+function M.close(opts)
+  opts = opts or {}
+
+  -- Check for pending comments
+  local pending = state.get_pending_comments()
+  if #pending > 0 and not opts.force then
+    local msg = string.format(
+      "You have %d unsaved comment%s. Close anyway?",
+      #pending,
+      #pending > 1 and "s" or ""
+    )
+    vim.ui.select({ "Yes, discard comments", "No, keep reviewing" }, {
+      prompt = msg,
+    }, function(choice)
+      if choice and choice:match("^Yes") then
+        M.close_internal()
+      end
+    end)
+  else
+    M.close_internal()
+  end
 end
 
 ---Focus file tree window
@@ -254,6 +279,37 @@ function M.setup_autocmds()
       -- If file tree is wiped, close the whole review
       if state.is_active() then
         M.close()
+      end
+    end,
+  })
+
+  -- Intercept :q/:quit in review tabpage to close entire review
+  vim.api.nvim_create_autocmd("QuitPre", {
+    group = group,
+    callback = function()
+      if not state.is_active() then
+        return
+      end
+
+      local layout = state.state.layout
+      if not layout.tabpage or not vim.api.nvim_tabpage_is_valid(layout.tabpage) then
+        return
+      end
+
+      -- Check if we're in the review tabpage
+      if vim.api.nvim_get_current_tabpage() == layout.tabpage then
+        local pending = state.get_pending_comments()
+        if #pending > 0 then
+          -- Warn user about unsaved comments
+          vim.notify(
+            string.format("Discarding %d unsaved comment(s). Use 'q' keymap for confirmation dialog.", #pending),
+            vim.log.levels.WARN
+          )
+        end
+        -- Close the review layout
+        vim.schedule(function()
+          M.close_internal()
+        end)
       end
     end,
   })

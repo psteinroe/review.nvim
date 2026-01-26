@@ -800,4 +800,401 @@ function M.open_in_browser(number)
   end
 end
 
+-- ============================================================================
+-- Reactions
+-- ============================================================================
+
+---@alias Review.ReactionContent "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes"
+
+---@class Review.Reaction
+---@field id number Reaction ID
+---@field content Review.ReactionContent Reaction type
+---@field user string Username who reacted
+
+---Available reaction emojis
+M.REACTION_EMOJIS = {
+  ["+1"] = "👍",
+  ["-1"] = "👎",
+  ["laugh"] = "😄",
+  ["confused"] = "😕",
+  ["heart"] = "❤️",
+  ["hooray"] = "🎉",
+  ["rocket"] = "🚀",
+  ["eyes"] = "👀",
+}
+
+---List of valid reaction content types
+M.REACTION_CONTENTS = { "+1", "-1", "laugh", "hooray", "confused", "heart", "rocket", "eyes" }
+
+---Format reactions for display
+---@param reactions Review.Reaction[]|nil
+---@return string
+function M.format_reactions(reactions)
+  if not reactions or #reactions == 0 then
+    return ""
+  end
+
+  -- Count reactions by type
+  local counts = {}
+  for _, r in ipairs(reactions) do
+    counts[r.content] = (counts[r.content] or 0) + 1
+  end
+
+  -- Format with emojis
+  local parts = {}
+  for content, count in pairs(counts) do
+    local emoji = M.REACTION_EMOJIS[content] or content
+    if count > 1 then
+      table.insert(parts, emoji .. " " .. count)
+    else
+      table.insert(parts, emoji)
+    end
+  end
+
+  return table.concat(parts, " ")
+end
+
+---Get reactions for a review comment
+---@param comment_id number GitHub comment ID
+---@return Review.Reaction[]
+function M.get_comment_reactions(comment_id)
+  local git = require("review.integrations.git")
+  local repo = git.parse_repo()
+  if not repo then
+    return {}
+  end
+
+  local endpoint = string.format("repos/%s/%s/pulls/comments/%d/reactions", repo.owner, repo.repo, comment_id)
+  local data = M.api(endpoint) or {}
+
+  local reactions = {}
+  for _, item in ipairs(data) do
+    table.insert(reactions, {
+      id = item.id,
+      content = item.content,
+      user = item.user and item.user.login or "unknown",
+    })
+  end
+
+  return reactions
+end
+
+---Add a reaction to a review comment
+---@param comment_id number GitHub comment ID
+---@param content Review.ReactionContent Reaction type
+---@return boolean success
+function M.add_reaction(comment_id, content)
+  local git = require("review.integrations.git")
+  local repo = git.parse_repo()
+  if not repo then
+    vim.notify("Could not determine repository", vim.log.levels.ERROR)
+    return false
+  end
+
+  local endpoint = string.format("repos/%s/%s/pulls/comments/%d/reactions", repo.owner, repo.repo, comment_id)
+
+  local result = M.api(endpoint, {
+    method = "POST",
+    fields = { content = content },
+  })
+
+  if result then
+    local emoji = M.REACTION_EMOJIS[content] or content
+    vim.notify("Added " .. emoji .. " reaction", vim.log.levels.INFO)
+    return true
+  end
+
+  return false
+end
+
+---Remove a reaction from a review comment
+---@param comment_id number GitHub comment ID
+---@param reaction_id number Reaction ID
+---@return boolean success
+function M.remove_reaction(comment_id, reaction_id)
+  local git = require("review.integrations.git")
+  local repo = git.parse_repo()
+  if not repo then
+    vim.notify("Could not determine repository", vim.log.levels.ERROR)
+    return false
+  end
+
+  local endpoint = string.format(
+    "repos/%s/%s/pulls/comments/%d/reactions/%d",
+    repo.owner, repo.repo, comment_id, reaction_id
+  )
+
+  local result = M.run({ "api", endpoint, "--method", "DELETE" })
+
+  if result.code == 0 then
+    vim.notify("Removed reaction", vim.log.levels.INFO)
+    return true
+  end
+
+  vim.notify("Failed to remove reaction: " .. result.stderr, vim.log.levels.ERROR)
+  return false
+end
+
+---Show reaction picker for a comment
+---@param comment Review.Comment Comment to react to
+function M.pick_reaction(comment)
+  if not comment.github_id then
+    vim.notify("Cannot react to local comment", vim.log.levels.WARN)
+    return
+  end
+
+  local choices = {}
+  for content, emoji in pairs(M.REACTION_EMOJIS) do
+    table.insert(choices, { label = emoji .. " " .. content, content = content })
+  end
+
+  vim.ui.select(choices, {
+    prompt = "Select reaction:",
+    format_item = function(item)
+      return item.label
+    end,
+  }, function(choice)
+    if choice then
+      M.add_reaction(comment.github_id, choice.content)
+    end
+  end)
+end
+
+---Toggle a reaction on a comment
+---@param comment Review.Comment Comment to toggle reaction on
+---@param content Review.ReactionContent Reaction type
+function M.toggle_reaction(comment, content)
+  if not comment.github_id then
+    vim.notify("Cannot react to local comment", vim.log.levels.WARN)
+    return
+  end
+
+  -- Get current reactions to see if user already reacted
+  local reactions = M.get_comment_reactions(comment.github_id)
+
+  -- Get current user
+  local current_user = M.get_current_user()
+
+  -- Check if user already reacted with this content
+  for _, reaction in ipairs(reactions) do
+    if reaction.content == content and reaction.user == current_user then
+      -- Remove the reaction
+      M.remove_reaction(comment.github_id, reaction.id)
+      return
+    end
+  end
+
+  -- Add the reaction
+  M.add_reaction(comment.github_id, content)
+end
+
+---Get the current authenticated user
+---@return string? username
+function M.get_current_user()
+  local result = M.run({ "api", "user", "--jq", ".login" })
+  if result.code == 0 then
+    return vim.trim(result.stdout)
+  end
+  return nil
+end
+
+-- ============================================================================
+-- Fork PR Support
+-- ============================================================================
+
+---@class Review.ForkInfo
+---@field is_fork boolean Whether PR is from a fork
+---@field head_repo_owner? string Fork owner username
+---@field head_repo_url? string Fork repository URL
+---@field head_branch string Head branch name
+---@field head_label string Full ref (owner:branch for forks)
+
+---Fetch detailed PR info including fork information
+---@param number number PR number
+---@return Review.ForkInfo?
+function M.fetch_fork_info(number)
+  local result = M.run({
+    "pr",
+    "view",
+    tostring(number),
+    "--json",
+    "headRefName,headRepositoryOwner,headRepository,isCrossRepository",
+  })
+
+  if result.code ~= 0 then
+    return nil
+  end
+
+  local ok, data = pcall(vim.json.decode, result.stdout)
+  if not ok or not data then
+    return nil
+  end
+
+  local is_fork = data.isCrossRepository or false
+  local head_branch = data.headRefName or ""
+  local head_repo_owner = nil
+  local head_repo_url = nil
+  local head_label = head_branch
+
+  if is_fork and data.headRepositoryOwner and data.headRepository then
+    head_repo_owner = data.headRepositoryOwner.login
+    head_repo_url = string.format(
+      "https://github.com/%s/%s.git",
+      head_repo_owner,
+      data.headRepository.name
+    )
+    head_label = head_repo_owner .. ":" .. head_branch
+  end
+
+  return {
+    is_fork = is_fork,
+    head_repo_owner = head_repo_owner,
+    head_repo_url = head_repo_url,
+    head_branch = head_branch,
+    head_label = head_label,
+  }
+end
+
+---Setup remote for a fork PR
+---@param fork_info Review.ForkInfo Fork information
+---@return boolean success
+function M.setup_fork_remote(fork_info)
+  if not fork_info.is_fork or not fork_info.head_repo_owner or not fork_info.head_repo_url then
+    return true -- Not a fork, nothing to do
+  end
+
+  local remote_name = "fork-" .. fork_info.head_repo_owner
+  local git = require("review.integrations.git")
+
+  -- Check if remote already exists
+  local result = git.run({ "remote", "get-url", remote_name })
+  if result.code == 0 then
+    -- Remote exists, verify URL matches
+    local existing_url = vim.trim(result.stdout)
+    if existing_url == fork_info.head_repo_url then
+      return true -- Already set up correctly
+    end
+    -- Update URL if different
+    result = git.run({ "remote", "set-url", remote_name, fork_info.head_repo_url })
+    if result.code ~= 0 then
+      vim.notify("Failed to update fork remote URL: " .. result.stderr, vim.log.levels.ERROR)
+      return false
+    end
+  else
+    -- Add new remote
+    result = git.run({ "remote", "add", remote_name, fork_info.head_repo_url })
+    if result.code ~= 0 then
+      vim.notify("Failed to add fork remote: " .. result.stderr, vim.log.levels.ERROR)
+      return false
+    end
+  end
+
+  -- Fetch from the fork remote
+  vim.notify("Fetching from fork remote: " .. remote_name, vim.log.levels.INFO)
+  result = git.run({ "fetch", remote_name, fork_info.head_branch })
+  if result.code ~= 0 then
+    vim.notify("Failed to fetch from fork: " .. result.stderr, vim.log.levels.WARN)
+    -- Try fetching all refs
+    result = git.run({ "fetch", remote_name })
+    if result.code ~= 0 then
+      vim.notify("Failed to fetch fork remote: " .. result.stderr, vim.log.levels.ERROR)
+      return false
+    end
+  end
+
+  return true
+end
+
+---Checkout a PR (with fork support)
+---@param number number PR number
+---@return boolean success
+function M.checkout_pr_with_fork_support(number)
+  -- Get fork info first
+  local fork_info = M.fetch_fork_info(number)
+
+  if fork_info and fork_info.is_fork then
+    -- Setup fork remote
+    if not M.setup_fork_remote(fork_info) then
+      vim.notify("Failed to setup fork remote, trying gh pr checkout anyway", vim.log.levels.WARN)
+    end
+  end
+
+  -- Use gh pr checkout which handles most cases
+  return M.checkout_pr(number)
+end
+
+---Get diff for a fork PR
+---@param number number PR number
+---@param fork_info Review.ForkInfo Fork information
+---@return string diff
+function M.get_fork_pr_diff(number, fork_info)
+  if not fork_info.is_fork then
+    return M.fetch_pr_diff(number)
+  end
+
+  local git = require("review.integrations.git")
+  local remote_name = "fork-" .. fork_info.head_repo_owner
+  local ref = remote_name .. "/" .. fork_info.head_branch
+
+  -- Try to get diff against base
+  local state_module = require("review.core.state")
+  local base = state_module.state.base or "origin/main"
+
+  local result = git.run({ "diff", base .. "..." .. ref })
+  if result.code == 0 then
+    return result.stdout
+  end
+
+  -- Fallback to gh pr diff
+  return M.fetch_pr_diff(number)
+end
+
+---Clean up fork remotes that are no longer needed
+function M.cleanup_fork_remotes()
+  local git = require("review.integrations.git")
+
+  local result = git.run({ "remote" })
+  if result.code ~= 0 then
+    return
+  end
+
+  local remotes = vim.split(result.stdout, "\n")
+  local removed = 0
+
+  for _, remote in ipairs(remotes) do
+    if remote:match("^fork%-") then
+      local remove_result = git.run({ "remote", "remove", remote })
+      if remove_result.code == 0 then
+        removed = removed + 1
+      end
+    end
+  end
+
+  if removed > 0 then
+    vim.notify(string.format("Cleaned up %d fork remote(s)", removed), vim.log.levels.INFO)
+  end
+end
+
+---List all fork remotes
+---@return string[] List of fork remote names
+function M.list_fork_remotes()
+  local git = require("review.integrations.git")
+
+  local result = git.run({ "remote" })
+  if result.code ~= 0 then
+    return {}
+  end
+
+  local remotes = vim.split(result.stdout, "\n")
+  local fork_remotes = {}
+
+  for _, remote in ipairs(remotes) do
+    if remote:match("^fork%-") then
+      table.insert(fork_remotes, remote)
+    end
+  end
+
+  return fork_remotes
+end
+
 return M

@@ -21,6 +21,21 @@ local ns_id = vim.api.nvim_create_namespace("review_diff")
 ---@type Review.DiffBuffers
 local diff_buffers = {}
 
+---Convert a relative file path to absolute using git root
+---@param file_path string Relative file path
+---@return string Absolute file path
+local function to_absolute_path(file_path)
+  -- If already absolute, return as-is
+  if file_path:sub(1, 1) == "/" then
+    return file_path
+  end
+  local root = git.root_dir()
+  if root then
+    return root .. "/" .. file_path
+  end
+  return file_path
+end
+
 ---Find file in state by path
 ---@param path string File path
 ---@return Review.File?
@@ -119,8 +134,13 @@ function M.open_local_diff(file_path)
 
   if file_data and file_data.status == "added" then
     -- New file - just show the current file, no diff
-    vim.cmd("edit " .. vim.fn.fnameescape(file_path))
-    state.state.layout.diff_buf = vim.api.nvim_get_current_buf()
+    -- Use edit! to force switch even if current buffer is modified
+    vim.cmd("edit! " .. vim.fn.fnameescape(to_absolute_path(file_path)))
+    local buf = vim.api.nvim_get_current_buf()
+    state.state.layout.diff_buf = buf
+    diff_buffers.new_buf = buf
+    diff_buffers.new_win = vim.api.nvim_get_current_win()
+    M.setup_diff_keymaps(buf)
     return true
   end
 
@@ -134,13 +154,13 @@ function M.open_local_diff(file_path)
     vim.api.nvim_win_set_buf(diff_win, old_buf)
     diff_buffers.old_buf = old_buf
     state.state.layout.diff_buf = old_buf
+    M.setup_diff_keymaps(old_buf)
     return true
   end
 
   -- Normal case: show side-by-side diff
-  -- Create vertical split for old version
-  vim.cmd("vsplit")
-  vim.cmd("wincmd H") -- Move to left
+  -- Create vertical split for old version (leftward split stays in diff area)
+  vim.cmd("leftabove vsplit")
 
   local old_win = vim.api.nvim_get_current_win()
   diff_buffers.old_win = old_win
@@ -163,7 +183,7 @@ function M.open_local_diff(file_path)
   local new_win = vim.api.nvim_get_current_win()
   diff_buffers.new_win = new_win
 
-  vim.cmd("edit " .. vim.fn.fnameescape(file_path))
+  vim.cmd("edit! " .. vim.fn.fnameescape(to_absolute_path(file_path)))
   local new_buf = vim.api.nvim_get_current_buf()
   diff_buffers.new_buf = new_buf
   state.state.layout.diff_buf = new_buf
@@ -173,6 +193,10 @@ function M.open_local_diff(file_path)
   -- Set window options for better diff viewing
   M.setup_diff_window_options(old_win)
   M.setup_diff_window_options(new_win)
+
+  -- Set keymaps for diff buffers
+  M.setup_diff_keymaps(old_buf)
+  M.setup_diff_keymaps(new_buf)
 
   return true
 end
@@ -210,7 +234,7 @@ function M.open_pr_diff(file_path)
   if file_data and file_data.status == "added" then
     -- New file
     if use_working_tree then
-      vim.cmd("edit " .. vim.fn.fnameescape(file_path))
+      vim.cmd("edit! " .. vim.fn.fnameescape(to_absolute_path(file_path)))
     else
       local new_buf = M.create_ref_buffer(file_path, head_ref, { readonly = true })
       if new_buf then
@@ -218,7 +242,9 @@ function M.open_pr_diff(file_path)
         diff_buffers.new_buf = new_buf
       end
     end
-    state.state.layout.diff_buf = vim.api.nvim_get_current_buf()
+    local buf = vim.api.nvim_get_current_buf()
+    state.state.layout.diff_buf = buf
+    M.setup_diff_keymaps(buf)
     return true
   end
 
@@ -229,13 +255,13 @@ function M.open_pr_diff(file_path)
       vim.api.nvim_win_set_buf(diff_win, old_buf)
       diff_buffers.old_buf = old_buf
       state.state.layout.diff_buf = old_buf
+      M.setup_diff_keymaps(old_buf)
     end
     return true
   end
 
-  -- Normal diff view
-  vim.cmd("vsplit")
-  vim.cmd("wincmd H")
+  -- Normal diff view (leftward split stays in diff area)
+  vim.cmd("leftabove vsplit")
 
   local old_win = vim.api.nvim_get_current_win()
   diff_buffers.old_win = old_win
@@ -259,7 +285,7 @@ function M.open_pr_diff(file_path)
 
   if use_working_tree then
     -- Local mode: edit actual file
-    vim.cmd("edit " .. vim.fn.fnameescape(file_path))
+    vim.cmd("edit! " .. vim.fn.fnameescape(to_absolute_path(file_path)))
     diff_buffers.new_buf = vim.api.nvim_get_current_buf()
   else
     -- Remote mode: show PR branch version (read-only)
@@ -275,6 +301,10 @@ function M.open_pr_diff(file_path)
 
   M.setup_diff_window_options(old_win)
   M.setup_diff_window_options(new_win)
+
+  -- Set keymaps for diff buffers
+  M.setup_diff_keymaps(diff_buffers.old_buf)
+  M.setup_diff_keymaps(diff_buffers.new_buf)
 
   return true
 end
@@ -304,8 +334,9 @@ function M.open_file(file_path)
   end
 
   if success then
-    -- Trigger UI refresh for signs and virtual text
+    -- Jump to first hunk and trigger UI refresh
     vim.schedule(function()
+      M.jump_to_first_hunk()
       M.refresh_decorations()
     end)
   end
@@ -326,6 +357,36 @@ function M.setup_diff_window_options(win)
   vim.wo[win].foldlevel = 99 -- Start with folds open
   vim.wo[win].scrollbind = true
   vim.wo[win].cursorbind = true
+end
+
+---Setup keymaps for diff buffer
+---@param buf number Buffer handle
+function M.setup_diff_keymaps(buf)
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+
+  local opts = { buffer = buf, nowait = true, silent = true }
+
+  -- Close entire review with q
+  vim.keymap.set("n", "q", function()
+    layout.close()
+  end, opts)
+
+  -- Cross-file hunk navigation with Tab/S-Tab
+  vim.keymap.set("n", "<Tab>", function()
+    local nav = utils.safe_require("review.core.navigation")
+    if nav then
+      nav.next_hunk_across_files()
+    end
+  end, opts)
+
+  vim.keymap.set("n", "<S-Tab>", function()
+    local nav = utils.safe_require("review.core.navigation")
+    if nav then
+      nav.prev_hunk_across_files()
+    end
+  end, opts)
 end
 
 ---Close diff buffers and reset state
@@ -430,6 +491,23 @@ end
 ---Navigate to previous hunk
 function M.prev_hunk()
   pcall(vim.cmd, "normal! [c")
+end
+
+---Jump to first hunk in current diff
+function M.jump_to_first_hunk()
+  local win = diff_buffers.new_win or layout.get_diff_win()
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+
+  vim.api.nvim_set_current_win(win)
+
+  -- Go to top of file first
+  vim.cmd("normal! gg")
+
+  -- Then jump to first change
+  -- Use pcall as there might be no diff hunks
+  pcall(vim.cmd, "normal! ]c")
 end
 
 ---Get hunk at current cursor position

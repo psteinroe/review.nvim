@@ -32,6 +32,7 @@ local M = {}
 ---@field old_path? string For renames
 ---@field comment_count number Total comments on this file
 ---@field hunks Review.Hunk[] Parsed diff hunks
+---@field reviewed boolean Whether file has been reviewed (local: staged, PR: viewed)
 
 ---@class Review.PR
 ---@field number number PR number
@@ -189,6 +190,7 @@ end
 ---@param comment Review.Comment
 function M.add_comment(comment)
   table.insert(M.state.comments, comment)
+  M.update_file_comment_counts()
 end
 
 ---Find a comment by ID
@@ -211,6 +213,7 @@ function M.remove_comment(id)
   local _, idx = M.find_comment(id)
   if idx then
     table.remove(M.state.comments, idx)
+    M.update_file_comment_counts()
     return true
   end
   return false
@@ -276,14 +279,80 @@ function M.set_comments(comments)
 end
 
 ---Get total stats for the review
----@return {total_files: number, total_comments: number, pending_comments: number, unresolved_comments: number}
+---@return {total_files: number, total_comments: number, pending_comments: number, unresolved_comments: number, reviewed_files: number}
 function M.get_stats()
+  local reviewed_count = 0
+  for _, file in ipairs(M.state.files) do
+    if file.reviewed then
+      reviewed_count = reviewed_count + 1
+    end
+  end
   return {
     total_files = #M.state.files,
     total_comments = #M.state.comments,
     pending_comments = #M.get_pending_comments(),
     unresolved_comments = #M.get_unresolved_comments(),
+    reviewed_files = reviewed_count,
   }
+end
+
+---Set reviewed status for a file
+---@param path string File path
+---@param reviewed boolean
+function M.set_file_reviewed(path, reviewed)
+  local file = M.find_file(path)
+  if file then
+    file.reviewed = reviewed
+  end
+end
+
+---Toggle reviewed status for a file
+---@param path string File path
+---@return boolean? new_status New reviewed status, or nil if file not found
+function M.toggle_file_reviewed(path)
+  local file = M.find_file(path)
+  if file then
+    file.reviewed = not file.reviewed
+    return file.reviewed
+  end
+  return nil
+end
+
+---Get comment count for a file with pending indicator
+---@param path string File path
+---@return number count Total comment count
+---@return boolean has_pending Whether file has pending (local) comments
+function M.get_file_comment_info(path)
+  local count = 0
+  local has_pending = false
+  for _, comment in ipairs(M.state.comments) do
+    if comment.file == path then
+      count = count + 1
+      if comment.kind == "local" and comment.status == "pending" then
+        has_pending = true
+      end
+    end
+  end
+  return count, has_pending
+end
+
+---Sync reviewed state with git staged status (for local mode)
+function M.sync_reviewed_with_staged()
+  if M.state.mode ~= "local" then
+    return
+  end
+  local ok, git = pcall(require, "review.integrations.git")
+  if not ok or not git.get_staged_files then
+    return
+  end
+  local staged_files = git.get_staged_files()
+  local staged_set = {}
+  for _, path in ipairs(staged_files) do
+    staged_set[path] = true
+  end
+  for _, file in ipairs(M.state.files) do
+    file.reviewed = staged_set[file.path] == true
+  end
 end
 
 return M

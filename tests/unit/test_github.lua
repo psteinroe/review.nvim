@@ -504,4 +504,200 @@ T["real module"]["group_into_threads handles replies correctly"] = function()
   MiniTest.expect.equality(threads[1].replies[2].body, "Reply 2")
 end
 
+-- ============================================================================
+-- Reactions support
+-- ============================================================================
+T["REACTION_EMOJIS"] = MiniTest.new_set()
+
+T["REACTION_EMOJIS"]["exports reaction emoji mapping"] = function()
+  package.loaded["review.integrations.github"] = nil
+  local github = require("review.integrations.github")
+
+  MiniTest.expect.equality(type(github.REACTION_EMOJIS), "table")
+  MiniTest.expect.equality(github.REACTION_EMOJIS["+1"], "👍")
+  MiniTest.expect.equality(github.REACTION_EMOJIS["-1"], "👎")
+  MiniTest.expect.equality(github.REACTION_EMOJIS["laugh"], "😄")
+  MiniTest.expect.equality(github.REACTION_EMOJIS["hooray"], "🎉")
+  MiniTest.expect.equality(github.REACTION_EMOJIS["confused"], "😕")
+  MiniTest.expect.equality(github.REACTION_EMOJIS["heart"], "❤️")
+  MiniTest.expect.equality(github.REACTION_EMOJIS["rocket"], "🚀")
+  MiniTest.expect.equality(github.REACTION_EMOJIS["eyes"], "👀")
+end
+
+T["REACTION_CONTENTS"] = MiniTest.new_set()
+
+T["REACTION_CONTENTS"]["exports valid reaction content list"] = function()
+  package.loaded["review.integrations.github"] = nil
+  local github = require("review.integrations.github")
+
+  MiniTest.expect.equality(type(github.REACTION_CONTENTS), "table")
+  MiniTest.expect.equality(#github.REACTION_CONTENTS, 8)
+  MiniTest.expect.equality(vim.tbl_contains(github.REACTION_CONTENTS, "+1"), true)
+  MiniTest.expect.equality(vim.tbl_contains(github.REACTION_CONTENTS, "-1"), true)
+  MiniTest.expect.equality(vim.tbl_contains(github.REACTION_CONTENTS, "laugh"), true)
+  MiniTest.expect.equality(vim.tbl_contains(github.REACTION_CONTENTS, "hooray"), true)
+  MiniTest.expect.equality(vim.tbl_contains(github.REACTION_CONTENTS, "confused"), true)
+  MiniTest.expect.equality(vim.tbl_contains(github.REACTION_CONTENTS, "heart"), true)
+  MiniTest.expect.equality(vim.tbl_contains(github.REACTION_CONTENTS, "rocket"), true)
+  MiniTest.expect.equality(vim.tbl_contains(github.REACTION_CONTENTS, "eyes"), true)
+end
+
+T["reactions functions"] = MiniTest.new_set()
+
+T["reactions functions"]["add_reaction exists"] = function()
+  package.loaded["review.integrations.github"] = nil
+  local github = require("review.integrations.github")
+
+  MiniTest.expect.equality(type(github.add_reaction), "function")
+end
+
+T["reactions functions"]["remove_reaction exists"] = function()
+  package.loaded["review.integrations.github"] = nil
+  local github = require("review.integrations.github")
+
+  MiniTest.expect.equality(type(github.remove_reaction), "function")
+end
+
+T["reactions functions"]["toggle_reaction exists"] = function()
+  package.loaded["review.integrations.github"] = nil
+  local github = require("review.integrations.github")
+
+  MiniTest.expect.equality(type(github.toggle_reaction), "function")
+end
+
+T["reactions functions"]["pick_reaction exists"] = function()
+  package.loaded["review.integrations.github"] = nil
+  local github = require("review.integrations.github")
+
+  MiniTest.expect.equality(type(github.pick_reaction), "function")
+end
+
+T["reactions functions"]["format_reactions exists"] = function()
+  package.loaded["review.integrations.github"] = nil
+  local github = require("review.integrations.github")
+
+  MiniTest.expect.equality(type(github.format_reactions), "function")
+end
+
+T["format_reactions()"] = MiniTest.new_set()
+
+T["format_reactions()"]["returns empty string for no reactions"] = function()
+  package.loaded["review.integrations.github"] = nil
+  local github = require("review.integrations.github")
+
+  local result = github.format_reactions({})
+  MiniTest.expect.equality(result, "")
+end
+
+T["format_reactions()"]["returns empty string for nil"] = function()
+  package.loaded["review.integrations.github"] = nil
+  local github = require("review.integrations.github")
+
+  local result = github.format_reactions(nil)
+  MiniTest.expect.equality(result, "")
+end
+
+T["format_reactions()"]["formats single reaction"] = function()
+  package.loaded["review.integrations.github"] = nil
+  local github = require("review.integrations.github")
+
+  local reactions = {
+    { content = "+1", user = { login = "user1" } },
+  }
+  local result = github.format_reactions(reactions)
+  MiniTest.expect.equality(result:find("👍") ~= nil, true)
+end
+
+T["format_reactions()"]["formats multiple reactions with counts"] = function()
+  package.loaded["review.integrations.github"] = nil
+  local github = require("review.integrations.github")
+
+  local reactions = {
+    { content = "+1", user = { login = "user1" } },
+    { content = "+1", user = { login = "user2" } },
+    { content = "heart", user = { login = "user3" } },
+  }
+  local result = github.format_reactions(reactions)
+  MiniTest.expect.equality(result:find("👍") ~= nil, true)
+  MiniTest.expect.equality(result:find("2") ~= nil, true)
+  MiniTest.expect.equality(result:find("❤️") ~= nil, true)
+end
+
+-- ============================================================================
+-- Fork PR support
+-- ============================================================================
+T["fork support"] = MiniTest.new_set()
+
+T["fork support"]["fetch_fork_info exists"] = function()
+  package.loaded["review.integrations.github"] = nil
+  local github = require("review.integrations.github")
+
+  MiniTest.expect.equality(type(github.fetch_fork_info), "function")
+end
+
+T["fork support"]["setup_fork_remote exists"] = function()
+  package.loaded["review.integrations.github"] = nil
+  local github = require("review.integrations.github")
+
+  MiniTest.expect.equality(type(github.setup_fork_remote), "function")
+end
+
+T["fork support"]["checkout_pr_with_fork_support exists"] = function()
+  package.loaded["review.integrations.github"] = nil
+  local github = require("review.integrations.github")
+
+  MiniTest.expect.equality(type(github.checkout_pr_with_fork_support), "function")
+end
+
+T["fork support"]["cleanup_fork_remotes exists"] = function()
+  package.loaded["review.integrations.github"] = nil
+  local github = require("review.integrations.github")
+
+  MiniTest.expect.equality(type(github.cleanup_fork_remotes), "function")
+end
+
+T["fork support"]["list_fork_remotes exists"] = function()
+  package.loaded["review.integrations.github"] = nil
+  local github = require("review.integrations.github")
+
+  MiniTest.expect.equality(type(github.list_fork_remotes), "function")
+end
+
+T["list_fork_remotes()"] = MiniTest.new_set()
+
+T["list_fork_remotes()"]["returns array"] = function()
+  package.loaded["review.integrations.github"] = nil
+  local github = require("review.integrations.github")
+
+  local remotes = github.list_fork_remotes()
+  MiniTest.expect.equality(type(remotes), "table")
+end
+
+-- ============================================================================
+-- Extended mock tests for reactions
+-- ============================================================================
+T["mock reactions"] = MiniTest.new_set()
+
+T["mock reactions"]["setup with reactions"] = function()
+  mock_github.reset()
+  mock_github.add_comments(42, {
+    {
+      id = "gh_review_1",
+      kind = "review",
+      body = "Code comment",
+      author = "reviewer",
+      github_id = 100,
+      reactions = {
+        { content = "+1", user = { login = "user1" } },
+        { content = "heart", user = { login = "user2" } },
+      },
+    },
+  }, "review")
+
+  local comments = mock_github.fetch_review_comments(42)
+  MiniTest.expect.equality(#comments, 1)
+  MiniTest.expect.equality(comments[1].reactions ~= nil, true)
+  MiniTest.expect.equality(#comments[1].reactions, 2)
+end
+
 return T
