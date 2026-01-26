@@ -16,8 +16,6 @@ function processUser(user) {
 }
 
 // TODO: Add error handling
-// hi
-// bye
 function fetchData(url) {
   const response = fetch(url);
   return response.json();
