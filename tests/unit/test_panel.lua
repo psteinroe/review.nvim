@@ -355,7 +355,7 @@ T["render() PR mode"]["shows actions footer"] = function()
   local lines, _ = panel.render()
   local last_line = lines[#lines]
   MiniTest.expect.equality(last_line:match("%[a%]pprove") ~= nil, true)
-  MiniTest.expect.equality(last_line:match("%[g%]submit GitHub") ~= nil, true)
+  MiniTest.expect.equality(last_line:match("%[g%]comment") ~= nil, true)
 end
 
 -- ============================================================================

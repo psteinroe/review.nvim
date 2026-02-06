@@ -177,7 +177,7 @@ function M.render()
 
   -- Actions footer
   table.insert(lines, "")
-  table.insert(lines, " [a]pprove [x]request changes [c]onversation [s]end AI [g]submit GitHub [q]uit")
+  table.insert(lines, " [a]pprove [x]request changes [g]comment [c]onversation [s]end AI [q]uit")
 
   return lines, comment_map
 end
@@ -193,9 +193,12 @@ function M.render_comment(comment, lines, comment_map, show_location)
 
   local header = "   +"
   if show_location and comment.file then
-    header = header .. string.format(" %s:%d --", comment.file, comment.line or 0)
+    local file = type(comment.file) == "string" and comment.file or "unknown"
+    local line_num = type(comment.line) == "number" and comment.line or 0
+    header = header .. string.format(" %s:%d --", file, line_num)
   end
-  header = header .. string.format(" @%s -- %s ", comment.author or "unknown", utils.relative_time(comment.created_at))
+  local author = type(comment.author) == "string" and comment.author or "unknown"
+  header = header .. string.format(" @%s -- %s ", author, utils.relative_time(comment.created_at))
 
   -- Review state badge
   if comment.review_state then
@@ -211,8 +214,9 @@ function M.render_comment(comment, lines, comment_map, show_location)
   comment_map[#lines] = comment
 
   -- Body
-  if comment.body and comment.body ~= "" then
-    for line in comment.body:gmatch("[^\n]+") do
+  local body = type(comment.body) == "string" and comment.body or ""
+  if body ~= "" then
+    for line in body:gmatch("[^\n]+") do
       table.insert(lines, "   | " .. line)
       comment_map[#lines] = comment
     end
@@ -224,8 +228,8 @@ function M.render_comment(comment, lines, comment_map, show_location)
   -- Replies
   if comment.replies and #comment.replies > 0 then
     for _, reply in ipairs(comment.replies) do
-      local reply_author = reply.author or "anonymous"
-      local reply_body = (reply.body or ""):gsub("\n", " ")
+      local reply_author = type(reply.author) == "string" and reply.author or "anonymous"
+      local reply_body = type(reply.body) == "string" and reply.body or ""
       table.insert(lines, string.format("   |   > @%s: %s", reply_author, utils.truncate(reply_body, 50)))
       comment_map[#lines] = comment
     end
@@ -318,7 +322,7 @@ function M.setup_keymaps(buf)
     M.close()
     local github = utils.safe_require("review.integrations.github")
     if github then
-      github.submit_review()
+      github.comment()
     end
   end, opts)
 

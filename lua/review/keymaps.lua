@@ -23,6 +23,7 @@ local utils = require("review.utils")
 ---@field toggle_panel string Toggle PR panel
 ---@field focus_tree string Focus file tree
 ---@field focus_diff string Focus diff view
+---@field close string Close review
 ---@field add_comment string Add note comment
 ---@field add_issue string Add issue comment
 ---@field add_suggestion string Add suggestion comment
@@ -67,6 +68,9 @@ M.defaults = {
   toggle_panel = "<leader>rp",
   focus_tree = "<leader>rf",
   focus_diff = "<leader>rd",
+  toggle_diff = "<leader>rD",
+  close = "<leader>rq",
+  accept_and_next = "<leader>rn",
 
   -- Comment actions
   add_comment = "<leader>cc",
@@ -156,6 +160,22 @@ local function add_comment(comment_type, start_line, end_line)
   -- Ensure start <= end
   if start_line > end_line then
     start_line, end_line = end_line, start_line
+  end
+
+  -- Block comments outside diff hunks when targeting GitHub
+  local diff_parser = require("review.core.diff_parser")
+  if diff_parser.should_restrict_to_hunks(current_file) then
+    local file_data = state.find_file(current_file)
+    if file_data and file_data.status ~= "added" then
+      local hunk = diff_parser.find_hunk_for_line(file_data.hunks or {}, start_line)
+      if not hunk then
+        vim.notify(
+          "Cannot comment here — line is outside the PR diff (only changed lines + context are commentable)",
+          vim.log.levels.WARN
+        )
+        return
+      end
+    end
   end
 
   local original_win = vim.api.nvim_get_current_win()
@@ -449,13 +469,56 @@ function M.setup()
       "n",
       keymaps.toggle_panel,
       when_active(function()
-        -- Panel will be implemented in ui/panel.lua
-        vim.notify("Panel toggle not yet implemented", vim.log.levels.INFO)
+        local panel = require("review.ui.panel")
+        panel.toggle()
       end),
       "Review: Toggle panel",
     },
     { "n", keymaps.focus_tree, when_active(layout.focus_tree), "Review: Focus tree" },
     { "n", keymaps.focus_diff, when_active(layout.focus_diff), "Review: Focus diff" },
+    {
+      "n",
+      keymaps.toggle_diff,
+      when_active(function()
+        local diff = require("review.ui.diff")
+        diff.toggle_diff()
+      end),
+      "Review: Toggle diff split",
+    },
+    {
+      "n",
+      keymaps.close,
+      when_active(function()
+        layout.close()
+      end),
+      "Review: Close",
+    },
+    {
+      "n",
+      keymaps.accept_and_next,
+      when_active(function()
+        local file_tree = require("review.ui.file_tree")
+        local current_file = state.state.current_file
+        if current_file then
+          -- Mark current file as reviewed
+          state.set_file_reviewed(current_file, true)
+          -- In local mode, also stage the file
+          if state.state.mode == "local" then
+            local git = require("review.integrations.git")
+            git.stage_file(current_file)
+          end
+          -- Move to next file and open it
+          file_tree.select_next()
+          file_tree.open_selected()
+          -- Jump to first hunk after file loads
+          vim.schedule(function()
+            local diff = require("review.ui.diff")
+            diff.jump_to_first_hunk()
+          end)
+        end
+      end),
+      "Review: Accept and next",
+    },
 
     -- Comment actions (normal mode)
     {
@@ -586,7 +649,12 @@ function M.setup()
       "n",
       keymaps.submit_to_github,
       when_active(function()
-        vim.notify("GitHub submission not yet implemented", vim.log.levels.INFO)
+        if state.state.mode ~= "pr" then
+          vim.notify("GitHub submission only available in PR mode", vim.log.levels.WARN)
+          return
+        end
+        local github = require("review.integrations.github")
+        github.submit_review("COMMENT")
       end),
       "Review: Submit to GitHub",
     },
@@ -594,7 +662,12 @@ function M.setup()
       "n",
       keymaps.approve,
       when_active(function()
-        vim.notify("PR approval not yet implemented", vim.log.levels.INFO)
+        if state.state.mode ~= "pr" then
+          vim.notify("PR approval only available in PR mode", vim.log.levels.WARN)
+          return
+        end
+        local github = require("review.integrations.github")
+        github.submit_review("APPROVE")
       end),
       "Review: Approve PR",
     },
@@ -602,7 +675,12 @@ function M.setup()
       "n",
       keymaps.request_changes,
       when_active(function()
-        vim.notify("Request changes not yet implemented", vim.log.levels.INFO)
+        if state.state.mode ~= "pr" then
+          vim.notify("Request changes only available in PR mode", vim.log.levels.WARN)
+          return
+        end
+        local github = require("review.integrations.github")
+        github.submit_review("REQUEST_CHANGES")
       end),
       "Review: Request changes",
     },
@@ -658,6 +736,9 @@ function M.teardown()
     keymaps.toggle_panel,
     keymaps.focus_tree,
     keymaps.focus_diff,
+    keymaps.toggle_diff,
+    keymaps.close,
+    keymaps.accept_and_next,
     keymaps.add_comment,
     keymaps.add_issue,
     keymaps.add_suggestion,
@@ -784,7 +865,7 @@ function M.get_all_definitions()
       { key = keymaps.add_praise, desc = "Add praise comment" },
       { key = keymaps.edit_comment, desc = "Edit comment at cursor" },
       { key = keymaps.delete_comment, desc = "Delete comment at cursor" },
-      { key = keymaps.show_comment, desc = "Show comment popup" },
+      { key = keymaps.show_comment, desc = "Show comment popup (with actions)" },
       { key = keymaps.reply, desc = "Reply to comment" },
       { key = keymaps.resolve, desc = "Toggle resolve status" },
     },

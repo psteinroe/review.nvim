@@ -30,50 +30,34 @@ function M.get_namespace()
   return ns_id
 end
 
----Get icon for a comment based on its type
+---Get status info for a comment
 ---@param comment Review.Comment
----@return string
-function M.get_icon(comment)
+---@return string sign, string highlight, string status_label
+function M.get_status_info(comment)
   -- AI processing takes priority
   if comment.status == "ai_processing" then
-    return "🤖"
+    return "●", "ReviewVirtualAI", "processing"
   end
   if comment.status == "ai_complete" then
-    return "✅"
+    return "○", "ReviewVirtualSubmitted", "complete"
   end
-  if comment.resolved then
-    return "✓"
-  end
-  if comment.kind == "local" then
-    local icons = {
-      note = "📝",
-      issue = "⚠️",
-      suggestion = "💡",
-      praise = "✨",
-    }
-    return icons[comment.type] or "📝"
-  end
-  return "💬"
-end
 
----Get highlight group for a comment
----@param comment Review.Comment
----@return string
-function M.get_highlight(comment)
-  -- AI processing takes priority
-  if comment.status == "ai_processing" then
-    return "ReviewVirtualAI"
-  end
-  if comment.status == "ai_complete" then
-    return "ReviewVirtualResolved"
-  end
+  -- Resolved threads
   if comment.resolved then
-    return "ReviewVirtualResolved"
+    return "◆", "ReviewVirtualResolved", "resolved"
   end
+
+  -- Local comments
   if comment.kind == "local" then
-    return "ReviewVirtualLocal"
+    if comment.status == "submitted" then
+      return "○", "ReviewVirtualSubmitted", ""
+    else
+      return "●", "ReviewVirtualPending", "pending"
+    end
   end
-  return "ReviewVirtualGithub"
+
+  -- GitHub comments from others
+  return "◇", "ReviewVirtualGithub", ""
 end
 
 ---Truncate text for display
@@ -106,16 +90,23 @@ function M.format_virtual_text(comment, max_len)
   local cfg = get_config()
   max_len = max_len or cfg.max_length
 
-  local icon = M.get_icon(comment)
+  local sign, hl, status_label = M.get_status_info(comment)
   local preview = M.truncate(comment.body, max_len)
-  local hl = M.get_highlight(comment)
 
   -- Build the virtual text string
-  local parts = { icon }
+  local parts = { sign }
 
-  -- Add author if available and not "you"
-  if comment.author and comment.author ~= "you" then
-    table.insert(parts, "@" .. comment.author .. ":")
+  -- Add status label if present
+  if status_label ~= "" then
+    table.insert(parts, "[" .. status_label .. "]")
+  end
+
+  -- Add author
+  local author = comment.author or "you"
+  if author == "you" then
+    table.insert(parts, "you:")
+  else
+    table.insert(parts, "@" .. author .. ":")
   end
 
   -- Add preview text
@@ -131,7 +122,7 @@ end
 ---@param comment Review.Comment
 ---@return number? extmark_id The extmark ID, or nil if failed
 function M.add_virtual_text(buf, comment)
-  if not comment.line then
+  if type(comment.line) ~= "number" then
     return nil
   end
 
@@ -146,13 +137,14 @@ function M.add_virtual_text(buf, comment)
 
   -- Get the line count to validate the line number
   local line_count = vim.api.nvim_buf_line_count(buf)
-  if comment.line < 1 or comment.line > line_count then
+  local line_num = type(comment.line) == "number" and comment.line or nil
+  if not line_num or line_num < 1 or line_num > line_count then
     return nil
   end
 
   local text, hl = M.format_virtual_text(comment, cfg.max_length)
 
-  local extmark_id = vim.api.nvim_buf_set_extmark(buf, ns_id, comment.line - 1, 0, {
+  local extmark_id = vim.api.nvim_buf_set_extmark(buf, ns_id, line_num - 1, 0, {
     virt_text = { { " " .. text, hl } },
     virt_text_pos = cfg.position,
     hl_mode = "combine",
@@ -216,7 +208,7 @@ function M.refresh_buffer(buf, file)
   -- Group comments by line (show only the first comment per line as virtual text)
   local comments_by_line = {}
   for _, comment in ipairs(comments) do
-    if comment.line then
+    if type(comment.line) == "number" then
       if not comments_by_line[comment.line] then
         comments_by_line[comment.line] = comment
       end
@@ -342,12 +334,13 @@ end
 ---@param buf number Buffer handle
 ---@param comment Review.Comment
 function M.update_comment(buf, comment)
-  if not comment.line then
+  local line_num = type(comment.line) == "number" and comment.line or nil
+  if not line_num then
     return
   end
 
   -- Remove existing virtual text at this line
-  local existing = M.get_extmark_at_line(buf, comment.line)
+  local existing = M.get_extmark_at_line(buf, line_num)
   if existing then
     M.remove_virtual_text(buf, existing[1])
   end

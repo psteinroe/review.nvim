@@ -485,4 +485,162 @@ function M.unstage_file(path)
   return false, vim.trim(result.stderr)
 end
 
+---Get tracking branch for current branch
+---@return string? tracking_branch e.g., "origin/feature-branch"
+function M.get_tracking_branch()
+  local result = M.run({ "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}" })
+  if result.code == 0 then
+    return vim.trim(result.stdout)
+  end
+  return nil
+end
+
+---Get changed files between two refs (or working tree if ref2 is nil)
+---Returns a set of file paths for fast lookup
+---@param ref1 string First ref (e.g., "origin/main")
+---@param ref2? string Second ref (nil = working tree)
+---@return table<string, string> Map of path -> status letter (A/M/D/R)
+function M.get_changed_files_between(ref1, ref2)
+  local root = M.root_dir()
+  local args = { "diff", "--name-status" }
+
+  if ref2 then
+    -- Compare ref1 to ref2
+    table.insert(args, ref1)
+    table.insert(args, ref2)
+  else
+    -- Compare ref1 to working tree (including staged and unstaged)
+    table.insert(args, ref1)
+  end
+
+  local result = M.run(args, { cwd = root })
+  if result.code ~= 0 then
+    return {}
+  end
+
+  local files = {}
+  for line in result.stdout:gmatch("[^\n]+") do
+    -- Parse: "M\tpath" or "R100\told\tnew"
+    local status, path = line:match("^([AMDRC])%d*%s+(.+)$")
+    if not status then
+      -- Handle renames
+      status, _, path = line:match("^(R)%d*%s+(.+)%s+(.+)$")
+    end
+    if status and path then
+      files[path] = status
+    end
+  end
+
+  return files
+end
+
+---Get uncommitted changes (staged + unstaged vs HEAD)
+---@return table<string, string> Map of path -> status letter
+function M.get_uncommitted_files()
+  local root = M.root_dir()
+  local result = M.run({ "status", "--porcelain" }, { cwd = root })
+  if result.code ~= 0 then
+    return {}
+  end
+
+  local files = {}
+  for line in result.stdout:gmatch("[^\n]+") do
+    -- Parse: "XY path" where X=staged, Y=unstaged
+    local xy, path = line:match("^(..)%s+(.+)$")
+    if xy and path then
+      -- Handle renames: "R  old -> new"
+      local new_path = path:match("^.+ -> (.+)$")
+      if new_path then
+        path = new_path
+      end
+
+      local x = xy:sub(1, 1)
+      local y = xy:sub(2, 2)
+
+      -- Determine status: prefer staged status, fall back to unstaged
+      local status = "M"
+      if x == "A" or y == "A" or x == "?" then
+        status = "A"
+      elseif x == "D" or y == "D" then
+        status = "D"
+      elseif x == "R" then
+        status = "R"
+      end
+
+      files[path] = status
+    end
+  end
+
+  return files
+end
+
+---Compute provenance for files in hybrid mode
+---@param files Review.File[] Files to compute provenance for
+---@param origin_base string Base ref (e.g., "origin/main")
+---@param origin_head string Remote tracking branch (e.g., "origin/feature-branch")
+function M.compute_provenance(files, origin_base, origin_head)
+  local root = M.root_dir()
+
+  -- Get file sets for each provenance category
+  -- Pushed: files changed between origin_base and origin_head
+  local pushed = M.get_changed_files_between(origin_base, origin_head)
+
+  -- Local commits: files changed between origin_head and HEAD (local commits not pushed)
+  local local_commits = {}
+  local result = M.run({ "rev-parse", origin_head }, { cwd = root })
+  if result.code == 0 then
+    local origin_head_sha = vim.trim(result.stdout)
+    result = M.run({ "rev-parse", "HEAD" }, { cwd = root })
+    if result.code == 0 then
+      local head_sha = vim.trim(result.stdout)
+      -- Only compute local commits if HEAD is different from origin_head
+      if origin_head_sha ~= head_sha then
+        local_commits = M.get_changed_files_between(origin_head, "HEAD")
+      end
+    end
+  end
+
+  -- Uncommitted: files with uncommitted changes (staged or unstaged)
+  local uncommitted = M.get_uncommitted_files()
+
+  -- Assign provenance to each file
+  for _, file in ipairs(files) do
+    local in_pushed = pushed[file.path] ~= nil
+    local in_local = local_commits[file.path] ~= nil
+    local in_uncommitted = uncommitted[file.path] ~= nil
+
+    if in_pushed and (in_local or in_uncommitted) then
+      file.provenance = "both"
+    elseif in_pushed then
+      file.provenance = "pushed"
+    elseif in_local then
+      file.provenance = "local"
+    elseif in_uncommitted then
+      file.provenance = "uncommitted"
+    else
+      -- Default to pushed if file is in the diff but not categorized
+      -- (shouldn't happen normally)
+      file.provenance = "pushed"
+    end
+  end
+end
+
+---Check if local branch is ahead/behind remote tracking branch
+---@return {ahead: number, behind: number}?
+function M.get_ahead_behind()
+  local result = M.run({ "rev-list", "--left-right", "--count", "@{u}...HEAD" })
+  if result.code ~= 0 then
+    return nil
+  end
+
+  local behind, ahead = result.stdout:match("(%d+)%s+(%d+)")
+  if behind and ahead then
+    return {
+      ahead = tonumber(ahead) or 0,
+      behind = tonumber(behind) or 0,
+    }
+  end
+  return nil
+end
+
 return M

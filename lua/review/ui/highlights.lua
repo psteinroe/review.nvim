@@ -20,20 +20,20 @@ local M = {}
 
 ---@type table<string, Review.HighlightDef>
 M.defaults = {
-  -- Signs (gutter icons)
-  ReviewSignGithub = { link = "DiagnosticInfo" },
-  ReviewSignLocal = { link = "DiagnosticHint" },
-  ReviewSignIssue = { link = "DiagnosticWarn" },
-  ReviewSignSuggestion = { link = "DiagnosticOk" },
-  ReviewSignPraise = { link = "DiagnosticOk" },
-  ReviewSignResolved = { link = "Comment" },
-  ReviewSignAI = { fg = "#cba6f7" }, -- Purple for AI processing
+  -- Signs (gutter icons) - status based
+  ReviewSignPending = { fg = "#f9e2af" },    -- Yellow: local pending
+  ReviewSignSubmitted = { fg = "#a6e3a1" },  -- Green: your submitted
+  ReviewSignGithub = { fg = "#89b4fa" },     -- Blue: others' GitHub comments
+  ReviewSignResolved = { fg = "#6c7086" },   -- Gray: resolved threads
+  ReviewSignAI = { fg = "#cba6f7" },         -- Purple: AI processing
+  ReviewSignCommentable = { fg = "#585b70" },  -- Dim: commentable line indicator
 
   -- Virtual text (inline comment previews)
-  ReviewVirtualGithub = { link = "Comment" },
-  ReviewVirtualLocal = { fg = "#89b4fa", italic = true },
+  ReviewVirtualPending = { fg = "#f9e2af", italic = true },   -- Yellow
+  ReviewVirtualSubmitted = { fg = "#a6e3a1", italic = true }, -- Green
+  ReviewVirtualGithub = { fg = "#89b4fa", italic = true },    -- Blue
   ReviewVirtualResolved = { fg = "#6c7086", strikethrough = true },
-  ReviewVirtualAI = { fg = "#cba6f7", italic = true }, -- Purple for AI processing
+  ReviewVirtualAI = { fg = "#cba6f7", italic = true },
 
   -- File tree
   ReviewTreeFile = { link = "Normal" },
@@ -53,6 +53,13 @@ M.defaults = {
   ReviewTreeHeader = { bold = true },
   ReviewTreeStats = { link = "Comment" },
   ReviewTreeCurrent = { fg = "#cba6f7", bold = true }, -- Currently open file
+  ReviewTreeDirIndicator = { fg = "#89b4fa" }, -- ▼/▶ collapse/expand arrows
+
+  -- File tree - provenance (hybrid mode)
+  ReviewTreePushed = { fg = "#a6e3a1" },      -- Green: pushed to PR
+  ReviewTreeLocal = { fg = "#f9e2af" },       -- Yellow: local commits (not pushed)
+  ReviewTreeUncommitted = { fg = "#fab387" }, -- Orange: uncommitted changes
+  ReviewTreeBoth = { fg = "#89dceb" },        -- Cyan: both pushed + local/uncommitted
 
   -- Panel
   ReviewPanelHeader = { bold = true },

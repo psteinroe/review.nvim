@@ -24,6 +24,8 @@ local M = {}
 ---@field old_line? number Line number in old file
 ---@field new_line? number Line number in new file
 
+---@alias Review.Provenance "pushed"|"local"|"uncommitted"|"both"
+
 ---@class Review.File
 ---@field path string Relative file path
 ---@field status "added" | "modified" | "deleted" | "renamed"
@@ -33,6 +35,7 @@ local M = {}
 ---@field comment_count number Total comments on this file
 ---@field hunks Review.Hunk[] Parsed diff hunks
 ---@field reviewed boolean Whether file has been reviewed (local: staged, PR: viewed)
+---@field provenance? Review.Provenance File change provenance (hybrid mode only)
 
 ---@class Review.PR
 ---@field number number PR number
@@ -41,6 +44,7 @@ local M = {}
 ---@field author string Author username
 ---@field branch string Head branch
 ---@field base string Base branch
+---@field head_sha? string Head commit SHA
 ---@field created_at string ISO timestamp
 ---@field updated_at string ISO timestamp
 ---@field additions number Lines added
@@ -77,16 +81,18 @@ local M = {}
 
 ---@class Review.State
 ---@field active boolean Is a review session active?
----@field mode "local" | "pr" Local diff or GitHub PR
+---@field mode "local" | "pr" | "hybrid" Local diff, GitHub PR, or hybrid mode
 ---@field pr_mode? "remote" | "local" PR viewing mode
----@field pr? Review.PR PR data (if mode == "pr")
+---@field pr? Review.PR PR data (if mode == "pr" or "hybrid")
 ---@field base string Base ref (branch/commit)
+---@field origin_head? string Remote tracking ref for hybrid mode (e.g., "origin/feature-branch")
 ---@field files Review.File[] Changed files
 ---@field comments Review.Comment[] All comments
 ---@field current_file? string Currently open file
 ---@field current_comment_idx? number For ]c/[c navigation
 ---@field panel_open boolean Is PR panel visible?
 ---@field layout Review.Layout Window IDs
+---@field provenance_filter? Review.Provenance Filter files by provenance
 
 ---@type Review.State
 M.state = {
@@ -95,12 +101,14 @@ M.state = {
   pr_mode = nil,
   pr = nil,
   base = "HEAD",
+  origin_head = nil,
   files = {},
   comments = {},
   current_file = nil,
   current_comment_idx = nil,
   panel_open = false,
   layout = {},
+  provenance_filter = nil,
 }
 
 ---Check if a review session is active
@@ -117,29 +125,38 @@ function M.reset()
     pr_mode = nil,
     pr = nil,
     base = "HEAD",
+    diff_base = nil,
+    origin_head = nil,
     files = {},
     comments = {},
     current_file = nil,
     current_comment_idx = nil,
     panel_open = false,
     layout = {},
+    provenance_filter = nil,
   }
 end
 
 ---Set review mode
----@param mode "local" | "pr" Review mode
----@param opts? {base?: string, pr?: Review.PR, pr_mode?: "remote" | "local"}
+---@param mode "local" | "pr" | "hybrid" Review mode
+---@param opts? {base?: string, diff_base?: string, pr?: Review.PR, pr_mode?: "remote" | "local", origin_head?: string}
 function M.set_mode(mode, opts)
   opts = opts or {}
   M.state.mode = mode
   if opts.base then
     M.state.base = opts.base
   end
+  if opts.diff_base then
+    M.state.diff_base = opts.diff_base
+  end
   if opts.pr then
     M.state.pr = opts.pr
   end
   if opts.pr_mode then
     M.state.pr_mode = opts.pr_mode
+  end
+  if opts.origin_head then
+    M.state.origin_head = opts.origin_head
   end
 end
 
@@ -152,10 +169,12 @@ function M.get_comments_sorted()
   end, M.state.comments)
 
   table.sort(comments, function(a, b)
-    if a.file ~= b.file then
-      return a.file < b.file
+    local a_file = type(a.file) == "string" and a.file or ""
+    local b_file = type(b.file) == "string" and b.file or ""
+    if a_file ~= b_file then
+      return a_file < b_file
     end
-    return (a.line or 0) < (b.line or 0)
+    return (tonumber(a.line) or 0) < (tonumber(b.line) or 0)
   end)
 
   return comments
@@ -191,6 +210,7 @@ end
 function M.add_comment(comment)
   table.insert(M.state.comments, comment)
   M.update_file_comment_counts()
+  M.auto_save()
 end
 
 ---Find a comment by ID
@@ -214,6 +234,7 @@ function M.remove_comment(id)
   if idx then
     table.remove(M.state.comments, idx)
     M.update_file_comment_counts()
+    M.auto_save()
     return true
   end
   return false
@@ -338,7 +359,7 @@ end
 
 ---Sync reviewed state with git staged status (for local mode)
 function M.sync_reviewed_with_staged()
-  if M.state.mode ~= "local" then
+  if M.state.mode ~= "local" and M.state.mode ~= "hybrid" then
     return
   end
   local ok, git = pcall(require, "review.integrations.git")
@@ -352,6 +373,65 @@ function M.sync_reviewed_with_staged()
   end
   for _, file in ipairs(M.state.files) do
     file.reviewed = staged_set[file.path] == true
+  end
+end
+
+---Set provenance filter
+---@param provenance Review.Provenance?
+function M.set_provenance_filter(provenance)
+  M.state.provenance_filter = provenance
+end
+
+---Get provenance stats for current files
+---@return {pushed: number, local_commits: number, uncommitted: number, both: number}
+function M.get_provenance_stats()
+  local stats = { pushed = 0, local_commits = 0, uncommitted = 0, both = 0 }
+  for _, file in ipairs(M.state.files) do
+    if file.provenance == "pushed" then
+      stats.pushed = stats.pushed + 1
+    elseif file.provenance == "local" then
+      stats.local_commits = stats.local_commits + 1
+    elseif file.provenance == "uncommitted" then
+      stats.uncommitted = stats.uncommitted + 1
+    elseif file.provenance == "both" then
+      stats.both = stats.both + 1
+    end
+  end
+  return stats
+end
+
+---Auto-save comments to disk
+function M.auto_save()
+  if not M.state.active then
+    return
+  end
+
+  local ok, storage = pcall(require, "review.storage")
+  if not ok then
+    return
+  end
+
+  -- Both PR and hybrid modes use PR storage
+  if (M.state.mode == "pr" or M.state.mode == "hybrid") and M.state.pr then
+    storage.save_pr(M.state.pr.number, M.state.comments)
+  else
+    storage.save(M.state.comments)
+  end
+end
+
+---Load stored comments from disk
+---@return Review.Comment[]
+function M.load_stored()
+  local ok, storage = pcall(require, "review.storage")
+  if not ok then
+    return {}
+  end
+
+  -- Both PR and hybrid modes use PR storage
+  if (M.state.mode == "pr" or M.state.mode == "hybrid") and M.state.pr then
+    return storage.load_pr(M.state.pr.number)
+  else
+    return storage.load()
   end
 end
 

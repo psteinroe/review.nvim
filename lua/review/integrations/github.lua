@@ -55,7 +55,7 @@ end
 
 ---Run gh api command
 ---@param endpoint string API endpoint
----@param opts? {method?: string, fields?: table, raw_fields?: table, jq?: string}
+---@param opts? {method?: string, fields?: table, raw_fields?: table, jq?: string, paginate?: boolean, silent?: boolean}
 ---@return table? data Parsed JSON response or nil on error
 function M.api(endpoint, opts)
   opts = opts or {}
@@ -66,6 +66,11 @@ function M.api(endpoint, opts)
     table.insert(args, opts.method)
   end
 
+  -- Pagination support - fetches all pages automatically
+  if opts.paginate then
+    table.insert(args, "--paginate")
+  end
+
   -- Fields with JSON encoding
   if opts.fields then
     for key, value in pairs(opts.fields) do
@@ -74,12 +79,17 @@ function M.api(endpoint, opts)
     end
   end
 
-  -- Raw fields (for JSON values)
+  -- Raw fields (for JSON values - numbers, booleans, arrays, objects)
   if opts.raw_fields then
     for key, value in pairs(opts.raw_fields) do
       table.insert(args, "-F")
+      -- For -F, gh parses the value as JSON, so numbers should not be quoted
       if type(value) == "table" then
         table.insert(args, key .. "=" .. vim.json.encode(value))
+      elseif type(value) == "number" then
+        table.insert(args, key .. "=" .. value)
+      elseif type(value) == "boolean" then
+        table.insert(args, key .. "=" .. (value and "true" or "false"))
       else
         table.insert(args, key .. "=" .. tostring(value))
       end
@@ -94,13 +104,32 @@ function M.api(endpoint, opts)
 
   local result = M.run(args)
   if result.code ~= 0 then
-    vim.notify("GitHub API error: " .. result.stderr, vim.log.levels.ERROR)
+    -- Only show errors if not silent and not a 404 (which is often expected)
+    if not opts.silent and not result.stderr:match("404") and not result.stderr:match("Not Found") then
+      vim.notify("GitHub API error: " .. result.stderr, vim.log.levels.ERROR)
+    end
     return nil
   end
 
   -- Handle empty response
   if vim.trim(result.stdout) == "" then
     return {}
+  end
+
+  -- When paginating, gh returns newline-separated JSON arrays that need merging
+  if opts.paginate then
+    local all_items = {}
+    for line in result.stdout:gmatch("[^\n]+") do
+      local ok, page_data = pcall(vim.json.decode, line)
+      if ok and type(page_data) == "table" then
+        if vim.islist(page_data) then
+          vim.list_extend(all_items, page_data)
+        else
+          table.insert(all_items, page_data)
+        end
+      end
+    end
+    return all_items
   end
 
   local ok, data = pcall(vim.json.decode, result.stdout)
@@ -110,6 +139,85 @@ function M.api(endpoint, opts)
   end
 
   return data
+end
+
+---Build args for gh api command (shared between sync and async)
+---@param endpoint string API endpoint
+---@param opts? {method?: string, fields?: table, raw_fields?: table, jq?: string}
+---@return string[] args
+local function build_api_args(endpoint, opts)
+  opts = opts or {}
+  local args = { "api", endpoint }
+
+  if opts.method then
+    table.insert(args, "--method")
+    table.insert(args, opts.method)
+  end
+
+  if opts.fields then
+    for key, value in pairs(opts.fields) do
+      table.insert(args, "-f")
+      table.insert(args, key .. "=" .. tostring(value))
+    end
+  end
+
+  if opts.raw_fields then
+    for key, value in pairs(opts.raw_fields) do
+      table.insert(args, "-F")
+      if type(value) == "table" then
+        table.insert(args, key .. "=" .. vim.json.encode(value))
+      elseif type(value) == "number" then
+        table.insert(args, key .. "=" .. value)
+      elseif type(value) == "boolean" then
+        table.insert(args, key .. "=" .. (value and "true" or "false"))
+      else
+        table.insert(args, key .. "=" .. tostring(value))
+      end
+    end
+  end
+
+  if opts.jq then
+    table.insert(args, "--jq")
+    table.insert(args, opts.jq)
+  end
+
+  return args
+end
+
+---Run gh api command asynchronously
+---@param endpoint string API endpoint
+---@param opts? {method?: string, fields?: table, raw_fields?: table, jq?: string}
+---@param callback? fun(data: table?, err: string?) Called with result or error
+function M.api_async(endpoint, opts, callback)
+  local args = build_api_args(endpoint, opts)
+
+  M.run_async(args, {}, function(result)
+    if result.code ~= 0 then
+      if callback then
+        callback(nil, result.stderr)
+      end
+      return
+    end
+
+    if vim.trim(result.stdout) == "" then
+      if callback then
+        callback({}, nil)
+      end
+      return
+    end
+
+    local ok, data = pcall(vim.json.decode, result.stdout)
+    if not ok then
+      if callback then
+        callback(nil, "Failed to parse response")
+      end
+      return
+    end
+
+    if callback then
+      callback(data, nil)
+    end
+  end)
 end
 
 ---Run GraphQL query
@@ -147,17 +255,22 @@ end
 ---@param number number PR number
 ---@return Review.PR? pr PR data or nil on error
 function M.fetch_pr(number)
-  local git = require("review.integrations.git")
-  local repo = git.parse_repo()
-  if not repo then
-    vim.notify("Could not determine repository", vim.log.levels.ERROR)
+  -- Use gh pr view which handles repo context correctly
+  local result = M.run({
+    "pr",
+    "view",
+    tostring(number),
+    "--json",
+    "number,title,body,author,headRefName,baseRefName,headRefOid,createdAt,updatedAt,additions,deletions,changedFiles,state,reviewDecision,url",
+  })
+
+  if result.code ~= 0 then
+    -- Don't show error here - let caller handle it
     return nil
   end
 
-  local endpoint = string.format("repos/%s/%s/pulls/%d", repo.owner, repo.repo, number)
-  local data = M.api(endpoint)
-
-  if not data then
+  local ok, data = pcall(vim.json.decode, result.stdout)
+  if not ok or not data then
     return nil
   end
 
@@ -165,17 +278,18 @@ function M.fetch_pr(number)
     number = data.number,
     title = data.title,
     description = data.body or "",
-    author = data.user and data.user.login or "unknown",
-    branch = data.head and data.head.ref or "",
-    base = data.base and data.base.ref or "",
-    created_at = data.created_at,
-    updated_at = data.updated_at,
+    author = data.author and data.author.login or "unknown",
+    branch = data.headRefName or "",
+    base = data.baseRefName or "",
+    head_sha = data.headRefOid,
+    created_at = data.createdAt,
+    updated_at = data.updatedAt,
     additions = data.additions or 0,
     deletions = data.deletions or 0,
-    changed_files = data.changed_files or 0,
-    state = data.state,
-    review_decision = data.review_decision,
-    url = data.html_url,
+    changed_files = data.changedFiles or 0,
+    state = data.state and data.state:lower() or "open",
+    review_decision = data.reviewDecision,
+    url = data.url,
   }
 end
 
@@ -191,6 +305,55 @@ function M.fetch_pr_diff(number)
   return result.stdout
 end
 
+---Fetch file content from a PR's head commit via GitHub API
+---@param pr_number number PR number
+---@param file_path string File path
+---@return string? content File content or nil on error
+function M.fetch_file_content(pr_number, file_path)
+  local state = require("review.core.state")
+  local pr = state.state.pr
+  if not pr then
+    return nil
+  end
+
+  local git = require("review.integrations.git")
+  local repo = git.parse_repo()
+  if not repo then
+    return nil
+  end
+
+  -- Use head_sha which works for both forks and same-repo PRs
+  local ref = pr.head_sha or pr.branch
+  if not ref then
+    return nil
+  end
+
+  -- Fetch file content via GitHub API using the commit SHA
+  -- URL-encode the path for the API
+  local encoded_path = file_path:gsub("([^%w%-_%.~/])", function(c)
+    return string.format("%%%02X", string.byte(c))
+  end)
+  local endpoint = string.format("repos/%s/%s/contents/%s?ref=%s", repo.owner, repo.repo, encoded_path, ref)
+  local data = M.api(endpoint)
+
+  if data and data.content then
+    -- Content is base64 encoded
+    local content_clean = data.content:gsub("%s+", "") -- Remove all whitespace including newlines
+    local ok, decoded = pcall(vim.base64.decode, content_clean)
+    if ok then
+      return decoded
+    end
+  elseif data and data.download_url then
+    -- Large files have download_url instead - fetch via curl
+    local curl_result = vim.fn.system({ "curl", "-sL", data.download_url })
+    if vim.v.shell_error == 0 then
+      return curl_result
+    end
+  end
+
+  return nil
+end
+
 ---Fetch conversation comments (issue comments)
 ---@param number number PR/issue number
 ---@return Review.Comment[] comments
@@ -202,7 +365,7 @@ function M.fetch_conversation_comments(number)
   end
 
   local endpoint = string.format("repos/%s/%s/issues/%d/comments", repo.owner, repo.repo, number)
-  local data = M.api(endpoint) or {}
+  local data = M.api(endpoint, { paginate = true }) or {}
 
   local comments = {}
   for _, item in ipairs(data) do
@@ -231,7 +394,7 @@ function M.fetch_review_comments(number)
   end
 
   local endpoint = string.format("repos/%s/%s/pulls/%d/comments", repo.owner, repo.repo, number)
-  local data = M.api(endpoint) or {}
+  local data = M.api(endpoint, { paginate = true }) or {}
 
   local comments = {}
   for _, item in ipairs(data) do
@@ -271,7 +434,7 @@ function M.fetch_reviews(number)
   end
 
   local endpoint = string.format("repos/%s/%s/pulls/%d/reviews", repo.owner, repo.repo, number)
-  local data = M.api(endpoint) or {}
+  local data = M.api(endpoint, { paginate = true }) or {}
 
   local comments = {}
   for _, item in ipairs(data) do
@@ -302,10 +465,12 @@ function M.group_into_threads(comments)
   -- Separate root comments and replies
   for _, comment in ipairs(comments) do
     if comment.in_reply_to_id then
-      replies[comment.in_reply_to_id] = replies[comment.in_reply_to_id] or {}
-      table.insert(replies[comment.in_reply_to_id], comment)
+      local parent_id = tostring(comment.in_reply_to_id)
+      replies[parent_id] = replies[parent_id] or {}
+      table.insert(replies[parent_id], comment)
     else
-      threads[comment.github_id] = comment
+      local id = tostring(comment.github_id)
+      threads[id] = comment
       comment.replies = {}
     end
   end
@@ -315,7 +480,9 @@ function M.group_into_threads(comments)
     if threads[parent_id] then
       -- Sort replies by created_at
       table.sort(thread_replies, function(a, b)
-        return (a.created_at or "") < (b.created_at or "")
+        local a_time = tostring(a.created_at or "")
+        local b_time = tostring(b.created_at or "")
+        return a_time < b_time
       end)
       threads[parent_id].replies = thread_replies
     end
@@ -329,10 +496,14 @@ function M.group_into_threads(comments)
 
   -- Sort threads by file and line
   table.sort(result, function(a, b)
-    if a.file ~= b.file then
-      return (a.file or "") < (b.file or "")
+    local a_file = tostring(a.file or "")
+    local b_file = tostring(b.file or "")
+    if a_file ~= b_file then
+      return a_file < b_file
     end
-    return (a.line or 0) < (b.line or 0)
+    local a_line = tonumber(a.line) or 0
+    local b_line = tonumber(b.line) or 0
+    return a_line < b_line
   end)
 
   return result
@@ -354,6 +525,38 @@ function M.fetch_all_comments(number)
   return all
 end
 
+---Get current GitHub username
+---@return string|nil
+function M.get_current_user()
+  if M._current_user then
+    return M._current_user
+  end
+  local result = M.run({ "api", "user", "--jq", ".login" })
+  if result.code == 0 then
+    M._current_user = vim.trim(result.stdout)
+    return M._current_user
+  end
+  return nil
+end
+
+---Extract user's review status from PR reviews
+---@param reviews table[] List of reviews from GitHub API
+---@param username string Current user's login
+---@return string|nil status One of: "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "PENDING", nil
+local function get_user_review_status(reviews, username)
+  if not reviews or not username then
+    return nil
+  end
+  -- Find most recent review by this user
+  for i = #reviews, 1, -1 do
+    local review = reviews[i]
+    if review.author and review.author.login == username then
+      return review.state
+    end
+  end
+  return nil
+end
+
 ---Fetch PRs where user is requested as reviewer
 ---@return Review.PR[] prs
 function M.fetch_review_requests()
@@ -361,7 +564,7 @@ function M.fetch_review_requests()
     "pr",
     "list",
     "--json",
-    "number,title,author,createdAt,headRefName,baseRefName,additions,deletions,changedFiles,state,url",
+    "number,title,author,createdAt,headRefName,baseRefName,additions,deletions,changedFiles,state,url,reviews",
     "--search",
     "review-requested:@me",
   })
@@ -374,6 +577,7 @@ function M.fetch_review_requests()
     return {}
   end
 
+  local username = M.get_current_user()
   local prs = {}
   for _, item in ipairs(data) do
     table.insert(prs, {
@@ -388,6 +592,7 @@ function M.fetch_review_requests()
       changed_files = item.changedFiles or 0,
       state = item.state,
       url = item.url,
+      review_status = get_user_review_status(item.reviews, username),
     })
   end
 
@@ -401,7 +606,7 @@ function M.fetch_open_prs()
     "pr",
     "list",
     "--json",
-    "number,title,author,createdAt,headRefName,baseRefName,additions,deletions,changedFiles,state,url",
+    "number,title,author,createdAt,headRefName,baseRefName,additions,deletions,changedFiles,state,url,reviews",
     "--state",
     "open",
   })
@@ -414,6 +619,7 @@ function M.fetch_open_prs()
     return {}
   end
 
+  local username = M.get_current_user()
   local prs = {}
   for _, item in ipairs(data) do
     table.insert(prs, {
@@ -428,13 +634,14 @@ function M.fetch_open_prs()
       changed_files = item.changedFiles or 0,
       state = item.state,
       url = item.url,
+      review_status = get_user_review_status(item.reviews, username),
     })
   end
 
   return prs
 end
 
----Add a conversation comment to a PR
+---Add a conversation comment to a PR (async)
 function M.add_conversation_comment()
   local state = require("review.core.state")
   if not state.state.pr then
@@ -465,15 +672,86 @@ function M.add_conversation_comment()
       state.state.pr.number
     )
 
-    local result = M.api(endpoint, { method = "POST", fields = { body = body } })
-    if result then
-      vim.notify("Comment added", vim.log.levels.INFO)
-      M.refresh_comments()
-    end
+    vim.notify("Sending comment...", vim.log.levels.INFO)
+    M.api_async(endpoint, { method = "POST", fields = { body = body } }, function(data, err)
+      if err then
+        vim.notify("Failed to add comment: " .. err, vim.log.levels.ERROR)
+      else
+        vim.notify("Comment added", vim.log.levels.INFO)
+        M.refresh_comments()
+      end
+    end)
   end)
 end
 
----Submit a review with pending comments
+---Get the PR node ID (required for GraphQL mutations)
+---@param pr_number number
+---@return string? node_id
+function M.get_pr_node_id(pr_number)
+  local result = M.run({
+    "pr", "view", tostring(pr_number),
+    "--json", "id",
+    "--jq", ".id",
+  })
+  if result.code == 0 then
+    return vim.trim(result.stdout)
+  end
+  return nil
+end
+
+---Parse a unified diff to extract valid commentable line numbers per file (RIGHT side)
+---@param diff_text string Raw unified diff output
+---@return table<string, table<number, boolean>> Map of file path → set of valid line numbers
+local function parse_diff_valid_lines(diff_text)
+  local valid = {}
+  local current_file = nil
+  local new_line = 0
+
+  for line in diff_text:gmatch("[^\n]*\n?") do
+    -- Strip trailing newline/carriage return
+    line = line:gsub("[\r\n]+$", "")
+
+    -- New file header: diff --git a/path b/path
+    local file_path = line:match("^diff %-%-git a/.+ b/(.+)$")
+    if file_path then
+      current_file = file_path
+      new_line = 0 -- Reset line counter between files
+      if not valid[current_file] then
+        valid[current_file] = {}
+      end
+    end
+
+    -- Skip diff metadata headers before checking content
+    if line:match("^index ") or line:match("^%-%-%- ") or line:match("^%+%+%+ ") or line:match("^new file") or line:match("^deleted file") or line:match("^old mode") or line:match("^new mode") or line:match("^similarity") or line:match("^rename ") then
+      -- Diff metadata - skip entirely
+    else
+      -- Hunk header: @@ -old,count +new,count @@
+      local new_start = line:match("^@@ %-%d+,?%d* %+(%d+),?%d* @@")
+      if new_start then
+        new_line = tonumber(new_start)
+      elseif current_file and new_line > 0 then
+        local first_char = line:sub(1, 1)
+        if first_char == "+" then
+          -- Added line: valid on RIGHT side
+          valid[current_file][new_line] = true
+          new_line = new_line + 1
+        elseif first_char == "-" then
+          -- Deleted line: only on LEFT side, don't increment new_line
+        elseif first_char == " " then
+          -- Context line: valid on RIGHT side
+          valid[current_file][new_line] = true
+          new_line = new_line + 1
+        elseif first_char == "\\" then
+          -- "\ No newline at end of file" - skip
+        end
+      end
+    end
+  end
+
+  return valid
+end
+
+---Submit a review with pending comments using GraphQL
 ---@param event "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
 function M.submit_review(event)
   local state = require("review.core.state")
@@ -488,41 +766,275 @@ function M.submit_review(event)
     return
   end
 
+  -- Fetch the PR diff to validate which lines are commentable on GitHub
+  local pr_diff = M.fetch_pr_diff(state.state.pr.number)
+  local valid_lines = parse_diff_valid_lines(pr_diff)
+
+  -- Pre-compute which comments will be submitted vs skipped
+  local submittable = {}
+  local skipped = {}
+  for _, comment in ipairs(pending) do
+    if comment.file and comment.line then
+      local file_info = state.find_file(comment.file)
+      if file_info and (file_info.provenance == "local" or file_info.provenance == "uncommitted") then
+        table.insert(skipped, { comment = comment, reason = "local/uncommitted file" })
+      elseif valid_lines[comment.file] and valid_lines[comment.file][comment.line] then
+        table.insert(submittable, comment)
+      elseif valid_lines[comment.file] then
+        table.insert(skipped, { comment = comment, reason = "line not in PR diff" })
+      elseif pr_diff ~= "" then
+        table.insert(skipped, { comment = comment, reason = "file not in PR diff" })
+      else
+        -- Could not fetch PR diff, try submitting anyway
+        table.insert(submittable, comment)
+      end
+    end
+  end
+
+  -- Build summary lines (# prefix = stripped on submit, like git commit messages)
+  local summary_lines = {}
+  local event_labels = {
+    APPROVE = "Approve",
+    REQUEST_CHANGES = "Request Changes",
+    COMMENT = "Comment",
+  }
+  table.insert(summary_lines, "")
+  table.insert(summary_lines, string.format("# %s — PR #%d: %s",
+    event_labels[event] or event,
+    state.state.pr.number,
+    state.state.pr.title or ""))
+  table.insert(summary_lines, "#")
+
+  if #submittable > 0 then
+    table.insert(summary_lines, string.format("# %d comment(s) to submit:", #submittable))
+    for _, c in ipairs(submittable) do
+      local type_str = c.type and c.type ~= "note" and string.format("[%s] ", c.type) or ""
+      local preview = c.body:gsub("\n", " ")
+      if #preview > 50 then
+        preview = preview:sub(1, 47) .. "..."
+      end
+      table.insert(summary_lines, string.format("#   %s:%d  %s%s", c.file, c.line, type_str, preview))
+    end
+  else
+    table.insert(summary_lines, "# No comments to submit")
+  end
+
+  if #skipped > 0 then
+    table.insert(summary_lines, "#")
+    table.insert(summary_lines, string.format("# %d comment(s) skipped:", #skipped))
+    for _, s in ipairs(skipped) do
+      local c = s.comment
+      local preview = c.body:gsub("\n", " ")
+      if #preview > 40 then
+        preview = preview:sub(1, 37) .. "..."
+      end
+      local detail = s.reason
+      -- Show valid line ranges when a line isn't in the diff
+      if s.reason == "line not in PR diff" and valid_lines[c.file] then
+        local sorted = {}
+        for ln in pairs(valid_lines[c.file]) do
+          table.insert(sorted, ln)
+        end
+        table.sort(sorted)
+        if #sorted > 0 then
+          -- Compress into ranges like "1-5, 10-15"
+          local ranges = {}
+          local range_start = sorted[1]
+          local range_end = sorted[1]
+          for i = 2, #sorted do
+            if sorted[i] == range_end + 1 then
+              range_end = sorted[i]
+            else
+              if range_start == range_end then
+                table.insert(ranges, tostring(range_start))
+              else
+                table.insert(ranges, range_start .. "-" .. range_end)
+              end
+              range_start = sorted[i]
+              range_end = sorted[i]
+            end
+          end
+          if range_start == range_end then
+            table.insert(ranges, tostring(range_start))
+          else
+            table.insert(ranges, range_start .. "-" .. range_end)
+          end
+          detail = detail .. string.format(" (valid: %s)", table.concat(ranges, ", "))
+        end
+      end
+      table.insert(summary_lines, string.format("#   %s:%d  %s (%s)", c.file, c.line, preview, detail))
+    end
+  end
+
+  if #submittable == 0 and #skipped > 0 then
+    table.insert(summary_lines, "#")
+    table.insert(summary_lines, "# NOTE: GitHub only allows comments on lines visible in the PR diff")
+    table.insert(summary_lines, "# (changed lines + surrounding context). Comments on other lines")
+    table.insert(summary_lines, "# cannot be submitted as review comments.")
+  end
+
+  table.insert(summary_lines, "#")
+  table.insert(summary_lines, "# Lines starting with # are ignored.")
+  table.insert(summary_lines, "# Write your review summary above, then Ctrl+S to submit.")
+
   local float = require("review.ui.float")
   float.multiline_input({
-    prompt = "Review summary (optional)",
+    prompt = event_labels[event] or "Review",
+    default = table.concat(summary_lines, "\n"),
+    filetype = "gitcommit",
   }, function(lines)
-    local body = lines and table.concat(lines, "\n") or ""
+    -- Strip # comment lines and build body
+    local body_lines = {}
+    if lines then
+      for _, line in ipairs(lines) do
+        if not line:match("^#") then
+          table.insert(body_lines, line)
+        end
+      end
+    end
+    -- Trim leading/trailing blank lines
+    while #body_lines > 0 and body_lines[1]:match("^%s*$") do
+      table.remove(body_lines, 1)
+    end
+    while #body_lines > 0 and body_lines[#body_lines]:match("^%s*$") do
+      table.remove(body_lines)
+    end
+    local body = table.concat(body_lines, "\n")
 
-    -- Build gh pr review command
-    local args = { "pr", "review", tostring(state.state.pr.number) }
+    -- Get PR node ID for GraphQL
+    local pr_node_id = M.get_pr_node_id(state.state.pr.number)
+    if not pr_node_id then
+      vim.notify("Could not get PR node ID", vim.log.levels.ERROR)
+      return
+    end
 
+    -- Build threads array for GraphQL
+    local gql_threads = {}
+    for _, comment in ipairs(submittable) do
+      local comment_body = comment.body
+      if comment.type and comment.type ~= "note" then
+        local type_prefix = {
+          issue = "**Issue:** ",
+          suggestion = "**Suggestion:** ",
+          praise = "**Praise:** ",
+        }
+        comment_body = (type_prefix[comment.type] or "") .. comment_body
+      end
+
+      table.insert(gql_threads, {
+        path = comment.file,
+        line = comment.line,
+        side = "RIGHT",
+        body = comment_body,
+      })
+    end
+
+    if #skipped > 0 then
+      local reasons = {}
+      for _, s in ipairs(skipped) do
+        reasons[s.reason] = (reasons[s.reason] or 0) + 1
+      end
+      local parts = {}
+      for reason, count in pairs(reasons) do
+        table.insert(parts, string.format("%d %s", count, reason))
+      end
+      vim.notify("Skipped: " .. table.concat(parts, ", "), vim.log.levels.WARN)
+    end
+
+    -- If all comments were skipped and no body, nothing to submit for COMMENT event
+    if #gql_threads == 0 and (body == nil or body == "") and event == "COMMENT" then
+      vim.notify("No submittable comments — all skipped", vim.log.levels.WARN)
+      return
+    end
+
+    -- Map event to GraphQL enum
+    local gql_event = "COMMENT"
     if event == "APPROVE" then
-      table.insert(args, "--approve")
+      gql_event = "APPROVE"
     elseif event == "REQUEST_CHANGES" then
-      table.insert(args, "--request-changes")
-    else
-      table.insert(args, "--comment")
+      gql_event = "REQUEST_CHANGES"
     end
 
-    if body ~= "" then
-      table.insert(args, "--body")
-      table.insert(args, body)
+    -- Build GraphQL mutation using threads (supports line numbers)
+    local mutation = [[
+      mutation($prId: ID!, $body: String, $event: PullRequestReviewEvent!, $threads: [DraftPullRequestReviewThread!]) {
+        addPullRequestReview(input: {
+          pullRequestId: $prId
+          body: $body
+          event: $event
+          threads: $threads
+        }) {
+          pullRequestReview {
+            id
+            state
+          }
+        }
+      }
+    ]]
+
+    -- Build complete request body as JSON
+    local request_body = {
+      query = mutation,
+      variables = {
+        prId = pr_node_id,
+        body = body ~= "" and body or nil,
+        event = gql_event,
+        threads = #gql_threads > 0 and gql_threads or nil,
+      },
+    }
+
+    -- Send via stdin to ensure proper JSON encoding
+    local args = { "api", "graphql", "--input", "-" }
+    local json_body = vim.json.encode(request_body)
+
+    local cmd = vim.list_extend({ "gh" }, args)
+    local proc = vim.system(cmd, {
+      text = true,
+      stdin = json_body,
+    }):wait()
+
+    local result = {
+      code = proc.code,
+      stdout = proc.stdout or "",
+      stderr = proc.stderr or "",
+    }
+    -- Check for GraphQL errors in response body (can occur even with exit code 0)
+    local has_gql_errors = false
+    if result.stdout and result.stdout:match("errors") then
+      local ok, data = pcall(vim.json.decode, result.stdout)
+      if ok and data.errors and #data.errors > 0 then
+        has_gql_errors = true
+      end
     end
 
-    local result = M.run(args)
-    if result.code == 0 then
-      vim.notify("Review submitted", vim.log.levels.INFO)
-
-      -- Mark pending comments as submitted
+    if result.code == 0 and not has_gql_errors then
+      -- Mark only the submitted comments
       local comments_module = require("review.core.comments")
-      for _, comment in ipairs(pending) do
+      for _, comment in ipairs(submittable) do
         comments_module.mark_submitted(comment.id)
       end
 
+      vim.notify(string.format("Review submitted with %d comment(s)", #gql_threads), vim.log.levels.INFO)
       M.refresh_comments()
+
+      -- Prompt for next PR after APPROVE or REQUEST_CHANGES
+      if event == "APPROVE" or event == "REQUEST_CHANGES" then
+        M.prompt_next_pr(state.state.pr.number)
+      end
     else
-      vim.notify("Failed to submit review: " .. result.stderr, vim.log.levels.ERROR)
+      -- Parse error for better message
+      local err = result.stderr or "Unknown error"
+      if result.stdout and result.stdout:match("errors") then
+        local ok, data = pcall(vim.json.decode, result.stdout)
+        if ok and data.errors then
+          local msgs = {}
+          for _, e in ipairs(data.errors) do
+            table.insert(msgs, e.message or "Unknown error")
+          end
+          err = table.concat(msgs, "; ")
+        end
+      end
+      vim.notify("Failed to submit review: " .. err, vim.log.levels.ERROR)
     end
   end)
 end
@@ -537,7 +1049,55 @@ function M.request_changes()
   M.submit_review("REQUEST_CHANGES")
 end
 
----Reply to a comment thread
+---Submit comments without approving or requesting changes
+function M.comment()
+  M.submit_review("COMMENT")
+end
+
+---Fetch the next unreviewed PR from review requests
+---@param exclude_number? number PR number to exclude (current PR)
+---@return Review.PR|nil pr The next unreviewed PR, or nil if none
+function M.fetch_next_unreviewed_pr(exclude_number)
+  local prs = M.fetch_review_requests()
+  for _, pr in ipairs(prs) do
+    -- Skip current PR and already reviewed PRs
+    if pr.number ~= exclude_number and not pr.review_status then
+      return pr
+    end
+  end
+  return nil
+end
+
+---Prompt user to open next PR after review submission
+---@param current_pr_number number The PR that was just reviewed
+function M.prompt_next_pr(current_pr_number)
+  vim.schedule(function()
+    local next_pr = M.fetch_next_unreviewed_pr(current_pr_number)
+    if not next_pr then
+      vim.notify("All review requests completed!", vim.log.levels.INFO)
+      return
+    end
+
+    vim.ui.select(
+      { "Yes", "No" },
+      {
+        prompt = string.format("Open next PR? #%d %s (@%s)",
+          next_pr.number, next_pr.title or "", next_pr.author or ""),
+      },
+      function(choice)
+        if choice == "Yes" then
+          -- Close current review and open next
+          require("review").quit()
+          vim.schedule(function()
+            require("review").open_pr(next_pr.number)
+          end)
+        end
+      end
+    )
+  end)
+end
+
+---Reply to a comment thread (async)
 ---@param comment_id number GitHub comment ID
 ---@param body string Reply body
 function M.reply_to_comment(comment_id, body)
@@ -562,11 +1122,15 @@ function M.reply_to_comment(comment_id, body)
     comment_id
   )
 
-  local result = M.api(endpoint, { method = "POST", fields = { body = body } })
-  if result then
-    vim.notify("Reply added", vim.log.levels.INFO)
-    M.refresh_comments()
-  end
+  vim.notify("Sending reply...", vim.log.levels.INFO)
+  M.api_async(endpoint, { method = "POST", fields = { body = body } }, function(data, err)
+    if err then
+      vim.notify("Failed to add reply: " .. err, vim.log.levels.ERROR)
+    else
+      vim.notify("Reply added", vim.log.levels.INFO)
+      M.refresh_comments()
+    end
+  end)
 end
 
 ---Prompt for a reply to a comment
@@ -589,7 +1153,7 @@ function M.reply_to_comment_prompt(comment)
   end)
 end
 
----Resolve or unresolve a review thread
+---Resolve or unresolve a review thread (async)
 ---@param thread_id string GitHub thread node ID
 ---@param resolved boolean Whether to resolve or unresolve
 function M.resolve_thread(thread_id, resolved)
@@ -611,13 +1175,17 @@ function M.resolve_thread(thread_id, resolved)
     thread_id
   )
 
-  local result = M.run({ "api", "graphql", "-f", "query=" .. query })
-  if result.code == 0 then
-    vim.notify(resolved and "Thread resolved" or "Thread unresolved", vim.log.levels.INFO)
-    M.refresh_comments()
-  else
-    vim.notify("Failed to update thread: " .. result.stderr, vim.log.levels.ERROR)
-  end
+  local status_msg = resolved and "Resolving..." or "Unresolving..."
+  vim.notify(status_msg, vim.log.levels.INFO)
+
+  M.run_async({ "api", "graphql", "-f", "query=" .. query }, {}, function(result)
+    if result.code == 0 then
+      vim.notify(resolved and "Thread resolved" or "Thread unresolved", vim.log.levels.INFO)
+      M.refresh_comments()
+    else
+      vim.notify("Failed to update thread: " .. result.stderr, vim.log.levels.ERROR)
+    end
+  end)
 end
 
 ---Toggle thread resolution state
@@ -879,44 +1447,47 @@ function M.get_comment_reactions(comment_id)
   return reactions
 end
 
----Add a reaction to a review comment
+---Add a reaction to a review comment (async)
 ---@param comment_id number GitHub comment ID
 ---@param content Review.ReactionContent Reaction type
----@return boolean success
-function M.add_reaction(comment_id, content)
+---@param callback? fun(success: boolean) Optional callback
+function M.add_reaction(comment_id, content, callback)
   local git = require("review.integrations.git")
   local repo = git.parse_repo()
   if not repo then
     vim.notify("Could not determine repository", vim.log.levels.ERROR)
-    return false
+    if callback then callback(false) end
+    return
   end
 
+  local emoji = M.REACTION_EMOJIS[content] or content
   local endpoint = string.format("repos/%s/%s/pulls/comments/%d/reactions", repo.owner, repo.repo, comment_id)
 
-  local result = M.api(endpoint, {
+  M.api_async(endpoint, {
     method = "POST",
     fields = { content = content },
-  })
-
-  if result then
-    local emoji = M.REACTION_EMOJIS[content] or content
-    vim.notify("Added " .. emoji .. " reaction", vim.log.levels.INFO)
-    return true
-  end
-
-  return false
+  }, function(data, err)
+    if err then
+      vim.notify("Failed to add reaction: " .. err, vim.log.levels.ERROR)
+      if callback then callback(false) end
+    else
+      vim.notify("Added " .. emoji, vim.log.levels.INFO)
+      if callback then callback(true) end
+    end
+  end)
 end
 
----Remove a reaction from a review comment
+---Remove a reaction from a review comment (async)
 ---@param comment_id number GitHub comment ID
 ---@param reaction_id number Reaction ID
----@return boolean success
-function M.remove_reaction(comment_id, reaction_id)
+---@param callback? fun(success: boolean) Optional callback
+function M.remove_reaction(comment_id, reaction_id, callback)
   local git = require("review.integrations.git")
   local repo = git.parse_repo()
   if not repo then
     vim.notify("Could not determine repository", vim.log.levels.ERROR)
-    return false
+    if callback then callback(false) end
+    return
   end
 
   local endpoint = string.format(
@@ -924,15 +1495,15 @@ function M.remove_reaction(comment_id, reaction_id)
     repo.owner, repo.repo, comment_id, reaction_id
   )
 
-  local result = M.run({ "api", endpoint, "--method", "DELETE" })
-
-  if result.code == 0 then
-    vim.notify("Removed reaction", vim.log.levels.INFO)
-    return true
-  end
-
-  vim.notify("Failed to remove reaction: " .. result.stderr, vim.log.levels.ERROR)
-  return false
+  M.run_async({ "api", endpoint, "--method", "DELETE" }, {}, function(result)
+    if result.code == 0 then
+      vim.notify("Removed reaction", vim.log.levels.INFO)
+      if callback then callback(true) end
+    else
+      vim.notify("Failed to remove reaction: " .. result.stderr, vim.log.levels.ERROR)
+      if callback then callback(false) end
+    end
+  end)
 end
 
 ---Show reaction picker for a comment
@@ -1195,6 +1766,81 @@ function M.list_fork_remotes()
   end
 
   return fork_remotes
+end
+
+-- Cache for mentionable users (refreshed per session)
+local mentionable_users_cache = nil
+
+---Fetch users that can be mentioned in the repo
+---@return string[] users List of usernames
+function M.fetch_mentionable_users()
+  -- Return cached if available
+  if mentionable_users_cache then
+    return mentionable_users_cache
+  end
+
+  local git = require("review.integrations.git")
+  local repo = git.parse_repo()
+  if not repo then
+    return {}
+  end
+
+  local users = {}
+  local seen = {}
+
+  -- Add PR author and reviewers if we have PR context
+  local state = require("review.core.state")
+  if state.state.pr then
+    local author = state.state.pr.author
+    if author and not seen[author] then
+      table.insert(users, author)
+      seen[author] = true
+    end
+  end
+
+  -- Add comment authors from current session
+  for _, comment in ipairs(state.state.comments or {}) do
+    local author = comment.author
+    if author and type(author) == "string" and not seen[author] then
+      table.insert(users, author)
+      seen[author] = true
+    end
+  end
+
+  -- Fetch collaborators (async would be better but sync is simpler for completion)
+  local endpoint = string.format("repos/%s/%s/collaborators", repo.owner, repo.repo)
+  local data = M.api(endpoint, { jq = ".[].login" })
+  if data and type(data) == "string" then
+    for login in data:gmatch("[^\n]+") do
+      if login ~= "" and not seen[login] then
+        table.insert(users, login)
+        seen[login] = true
+      end
+    end
+  end
+
+  -- Fetch recent contributors (assignees-like)
+  local contributors_endpoint = string.format("repos/%s/%s/contributors?per_page=20", repo.owner, repo.repo)
+  local contributors = M.api(contributors_endpoint)
+  if contributors and type(contributors) == "table" then
+    for _, contrib in ipairs(contributors) do
+      local login = contrib.login
+      if login and not seen[login] then
+        table.insert(users, login)
+        seen[login] = true
+      end
+    end
+  end
+
+  -- Cache the result
+  mentionable_users_cache = users
+
+  return users
+end
+
+---Clear the mentionable users cache
+function M.clear_mentionable_cache()
+  mentionable_users_cache = nil
 end
 
 return M

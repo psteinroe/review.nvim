@@ -97,29 +97,10 @@ function M.close_internal()
   state.reset()
 end
 
----Close review layout with confirmation if there are pending comments
----@param opts? {force?: boolean} Options - force=true skips confirmation
-function M.close(opts)
-  opts = opts or {}
-
-  -- Check for pending comments
-  local pending = state.get_pending_comments()
-  if #pending > 0 and not opts.force then
-    local msg = string.format(
-      "You have %d unsaved comment%s. Close anyway?",
-      #pending,
-      #pending > 1 and "s" or ""
-    )
-    vim.ui.select({ "Yes, discard comments", "No, keep reviewing" }, {
-      prompt = msg,
-    }, function(choice)
-      if choice and choice:match("^Yes") then
-        M.close_internal()
-      end
-    end)
-  else
-    M.close_internal()
-  end
+---Close review layout
+---Comments are automatically saved to disk and will be restored on next open
+function M.close()
+  M.close_internal()
 end
 
 ---Focus file tree window
@@ -298,15 +279,7 @@ function M.setup_autocmds()
 
       -- Check if we're in the review tabpage
       if vim.api.nvim_get_current_tabpage() == layout.tabpage then
-        local pending = state.get_pending_comments()
-        if #pending > 0 then
-          -- Warn user about unsaved comments
-          vim.notify(
-            string.format("Discarding %d unsaved comment(s). Use 'q' keymap for confirmation dialog.", #pending),
-            vim.log.levels.WARN
-          )
-        end
-        -- Close the review layout
+        -- Comments are auto-saved, just close
         vim.schedule(function()
           M.close_internal()
         end)

@@ -86,11 +86,35 @@ function M.format_pr(pr)
   return table.concat(parts, " ")
 end
 
+---Get review status icon
+---@param status string|nil
+---@return string
+local function review_status_icon(status)
+  if not status then
+    return "○" -- Not reviewed
+  elseif status == "APPROVED" then
+    return "✓" -- Approved
+  elseif status == "CHANGES_REQUESTED" then
+    return "✗" -- Changes requested
+  elseif status == "COMMENTED" then
+    return "◐" -- Commented
+  elseif status == "PENDING" then
+    return "◔" -- Pending
+  else
+    return "○"
+  end
+end
+
 ---Format a PR with details for display
 ---@param pr Review.PR
 ---@return string
 function M.format_pr_detailed(pr)
   local parts = {}
+
+  -- Review status icon (if available)
+  if pr.review_status ~= nil then
+    table.insert(parts, review_status_icon(pr.review_status))
+  end
 
   -- PR number and title
   table.insert(parts, string.format("#%d %s", pr.number, pr.title or ""))
@@ -630,7 +654,32 @@ function M.input_pr_number(callback)
 end
 
 ---Show picker allowing choice between different PR listing modes
-function M.pick()
+---@param opts? {show_menu?: boolean}
+function M.pick(opts)
+  opts = opts or {}
+  local config = require("review.config")
+
+  -- Check if we should show menu or go directly to default
+  local show_menu = opts.show_menu
+  if show_menu == nil then
+    show_menu = config.get("github.picker_show_menu")
+  end
+
+  -- If not showing menu, use default mode
+  if not show_menu then
+    local default_mode = config.get("github.picker_default") or "review_requests"
+    if default_mode == "review_requests" then
+      M.review_requests()
+    elseif default_mode == "open_prs" then
+      M.open_prs()
+    elseif default_mode == "my_prs" then
+      M.my_prs()
+    else
+      M.review_requests()
+    end
+    return
+  end
+
   local choices = {
     { label = "Review requests", action = M.review_requests },
     { label = "Open PRs", action = M.open_prs },
