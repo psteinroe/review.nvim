@@ -399,4 +399,93 @@ T["get_stats"]["returns zeros for empty state"] = function()
   expect.equality(stats.unresolved_comments, 0)
 end
 
+-- =============================================================================
+-- Hybrid Mode Tests
+-- =============================================================================
+
+T["hybrid_mode"] = MiniTest.new_set()
+
+T["hybrid_mode"]["initial state has origin_head nil"] = function()
+  local state = get_state()
+  expect.equality(state.state.origin_head, nil)
+end
+
+T["hybrid_mode"]["initial state has provenance_filter nil"] = function()
+  local state = get_state()
+  expect.equality(state.state.provenance_filter, nil)
+end
+
+T["hybrid_mode"]["set_mode to hybrid works"] = function()
+  local state = get_state()
+  state.set_mode("hybrid", {
+    base = "origin/main",
+    origin_head = "origin/feature",
+    pr = { number = 42, title = "Test PR" },
+  })
+  expect.equality(state.state.mode, "hybrid")
+  expect.equality(state.state.base, "origin/main")
+  expect.equality(state.state.origin_head, "origin/feature")
+  expect.equality(state.state.pr.number, 42)
+end
+
+T["hybrid_mode"]["reset clears hybrid mode fields"] = function()
+  local state = get_state()
+  state.set_mode("hybrid", {
+    origin_head = "origin/feature",
+  })
+  state.state.provenance_filter = "pushed"
+
+  state.reset()
+
+  expect.equality(state.state.mode, "local")
+  expect.equality(state.state.origin_head, nil)
+  expect.equality(state.state.provenance_filter, nil)
+end
+
+T["hybrid_mode"]["set_provenance_filter sets filter"] = function()
+  local state = get_state()
+  state.set_provenance_filter("pushed")
+  expect.equality(state.state.provenance_filter, "pushed")
+end
+
+T["hybrid_mode"]["set_provenance_filter accepts nil"] = function()
+  local state = get_state()
+  state.set_provenance_filter("local")
+  state.set_provenance_filter(nil)
+  expect.equality(state.state.provenance_filter, nil)
+end
+
+T["hybrid_mode"]["get_provenance_stats counts correctly"] = function()
+  local state = get_state()
+  state.set_files({
+    { path = "a.lua", provenance = "pushed" },
+    { path = "b.lua", provenance = "pushed" },
+    { path = "c.lua", provenance = "local" },
+    { path = "d.lua", provenance = "uncommitted" },
+    { path = "e.lua", provenance = "both" },
+  })
+
+  local stats = state.get_provenance_stats()
+  expect.equality(stats.pushed, 2)
+  expect.equality(stats.local_commits, 1)
+  expect.equality(stats.uncommitted, 1)
+  expect.equality(stats.both, 1)
+end
+
+T["hybrid_mode"]["get_provenance_stats returns zeros for empty"] = function()
+  local state = get_state()
+  local stats = state.get_provenance_stats()
+  expect.equality(stats.pushed, 0)
+  expect.equality(stats.local_commits, 0)
+  expect.equality(stats.uncommitted, 0)
+  expect.equality(stats.both, 0)
+end
+
+T["hybrid_mode"]["sync_reviewed_with_staged works in hybrid mode"] = function()
+  local state = get_state()
+  state.set_mode("hybrid")
+  -- Just verify it doesn't error (actual staging requires git)
+  state.sync_reviewed_with_staged()
+end
+
 return T

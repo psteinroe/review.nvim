@@ -52,10 +52,12 @@ function M.next_unresolved()
 
   -- Sort by file, then line
   table.sort(all_unresolved, function(a, b)
-    if a.file ~= b.file then
-      return (a.file or "") < (b.file or "")
+    local a_file = type(a.file) == "string" and a.file or ""
+    local b_file = type(b.file) == "string" and b.file or ""
+    if a_file ~= b_file then
+      return a_file < b_file
     end
-    return (a.line or 0) < (b.line or 0)
+    return (tonumber(a.line) or 0) < (tonumber(b.line) or 0)
   end)
 
   -- Find current position and get next
@@ -94,10 +96,12 @@ function M.prev_unresolved()
 
   -- Sort by file, then line (descending for prev)
   table.sort(all_unresolved, function(a, b)
-    if a.file ~= b.file then
-      return (a.file or "") > (b.file or "")
+    local a_file = type(a.file) == "string" and a.file or ""
+    local b_file = type(b.file) == "string" and b.file or ""
+    if a_file ~= b_file then
+      return a_file > b_file
     end
-    return (a.line or 0) > (b.line or 0)
+    return (tonumber(a.line) or 0) > (tonumber(b.line) or 0)
   end)
 
   -- Find current position and get previous
@@ -134,10 +138,12 @@ function M.next_pending()
 
   -- Sort by file, then line
   table.sort(pending, function(a, b)
-    if a.file ~= b.file then
-      return (a.file or "") < (b.file or "")
+    local a_file = type(a.file) == "string" and a.file or ""
+    local b_file = type(b.file) == "string" and b.file or ""
+    if a_file ~= b_file then
+      return a_file < b_file
     end
-    return (a.line or 0) < (b.line or 0)
+    return (tonumber(a.line) or 0) < (tonumber(b.line) or 0)
   end)
 
   -- Find current position and get next
@@ -176,10 +182,12 @@ function M.prev_pending()
 
   -- Sort by file, then line (descending)
   table.sort(pending, function(a, b)
-    if a.file ~= b.file then
-      return (a.file or "") > (b.file or "")
+    local a_file = type(a.file) == "string" and a.file or ""
+    local b_file = type(b.file) == "string" and b.file or ""
+    if a_file ~= b_file then
+      return a_file > b_file
     end
-    return (a.line or 0) > (b.line or 0)
+    return (tonumber(a.line) or 0) > (tonumber(b.line) or 0)
   end)
 
   -- Find current position and get previous
@@ -609,13 +617,13 @@ function M.next_comment_in_file()
 
   -- Sort by line
   table.sort(comments, function(a, b)
-    return (a.line or 0) < (b.line or 0)
+    return (tonumber(a.line) or 0) < (tonumber(b.line) or 0)
   end)
 
   local current_line = M.get_cursor_line() or 0
 
   for _, comment in ipairs(comments) do
-    if (comment.line or 0) > current_line then
+    if (tonumber(comment.line) or 0) > current_line then
       M.goto_comment(comment)
       return comment
     end
@@ -642,13 +650,13 @@ function M.prev_comment_in_file()
 
   -- Sort by line descending
   table.sort(comments, function(a, b)
-    return (a.line or 0) > (b.line or 0)
+    return (tonumber(a.line) or 0) > (tonumber(b.line) or 0)
   end)
 
   local current_line = M.get_cursor_line() or math.huge
 
   for _, comment in ipairs(comments) do
-    if (comment.line or 0) < current_line then
+    if (tonumber(comment.line) or 0) < current_line then
       M.goto_comment(comment)
       return comment
     end

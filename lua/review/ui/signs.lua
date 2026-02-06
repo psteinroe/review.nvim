@@ -24,14 +24,14 @@ local is_setup = false
 local function get_sign_definitions()
   local cfg = config.config.signs or config.defaults.signs
   return {
-    comment_github = { text = cfg.comment_github, texthl = "ReviewSignGithub" },
-    comment_local = { text = cfg.comment_local, texthl = "ReviewSignLocal" },
-    comment_issue = { text = cfg.comment_issue, texthl = "ReviewSignIssue" },
-    comment_suggestion = { text = cfg.comment_suggestion, texthl = "ReviewSignSuggestion" },
-    comment_praise = { text = cfg.comment_praise, texthl = "ReviewSignPraise" },
-    comment_resolved = { text = cfg.comment_resolved, texthl = "ReviewSignResolved" },
-    comment_ai_processing = { text = cfg.comment_ai_processing, texthl = "ReviewSignAI" },
-    comment_ai_complete = { text = "✓", texthl = "ReviewSignResolved" },
+    -- Status-based signs
+    comment_pending = { text = cfg.comment_pending or "●", texthl = "ReviewSignPending" },
+    comment_submitted = { text = cfg.comment_submitted or "○", texthl = "ReviewSignSubmitted" },
+    comment_github = { text = cfg.comment_github or "◇", texthl = "ReviewSignGithub" },
+    comment_resolved = { text = cfg.comment_resolved or "◆", texthl = "ReviewSignResolved" },
+    -- AI status
+    comment_ai_processing = { text = cfg.comment_ai_processing or "●", texthl = "ReviewSignAI" },
+    comment_ai_complete = { text = "✓", texthl = "ReviewSignSubmitted" },
   }
 end
 
@@ -80,21 +80,24 @@ function M.get_sign_name(comment)
     return "Review_comment_ai_processing"
   elseif comment.status == "ai_complete" then
     return "Review_comment_ai_complete"
-  elseif comment.resolved then
-    return "Review_comment_resolved"
-  elseif comment.kind == "local" then
-    if comment.type == "issue" then
-      return "Review_comment_issue"
-    elseif comment.type == "suggestion" then
-      return "Review_comment_suggestion"
-    elseif comment.type == "praise" then
-      return "Review_comment_praise"
-    else
-      return "Review_comment_local"
-    end
-  else
-    return "Review_comment_github"
   end
+
+  -- Resolved threads
+  if comment.resolved then
+    return "Review_comment_resolved"
+  end
+
+  -- Local comments
+  if comment.kind == "local" then
+    if comment.status == "submitted" then
+      return "Review_comment_submitted"
+    else
+      return "Review_comment_pending"
+    end
+  end
+
+  -- GitHub comments from others
+  return "Review_comment_github"
 end
 
 ---Get sign definition by name

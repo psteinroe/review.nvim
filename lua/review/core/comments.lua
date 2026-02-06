@@ -68,6 +68,7 @@ function M.edit(id, body)
 
   comment.body = body
   comment.updated_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
+  state.auto_save()
   return true
 end
 
@@ -158,12 +159,13 @@ function M.set_type(id, type)
 
   comment.type = type
   comment.updated_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
+  state.auto_save()
   return true
 end
 
 ---Mark a local comment as submitted (after GitHub submission)
 ---@param id string Comment ID
----@param github_id number GitHub comment ID
+---@param github_id? number GitHub comment ID
 ---@return boolean success
 function M.mark_submitted(id, github_id)
   local comment = state.find_comment(id)
@@ -176,7 +178,10 @@ function M.mark_submitted(id, github_id)
   end
 
   comment.status = "submitted"
-  comment.github_id = github_id
+  if github_id then
+    comment.github_id = github_id
+  end
+  state.auto_save()
   return true
 end
 
@@ -187,13 +192,18 @@ end
 function M.get_at_line(file, line)
   local comments = state.get_comments_for_file(file)
   return vim.tbl_filter(function(c)
+    -- Ensure line numbers are actual numbers (not userdata from JSON)
+    local c_line = tonumber(c.line)
+    local c_start = tonumber(c.start_line)
+    local c_end = tonumber(c.end_line)
+
     -- Single line comment
-    if c.line == line and not c.start_line then
+    if c_line == line and not c_start then
       return true
     end
     -- Multi-line comment: check if line is within range
-    if c.start_line and c.end_line then
-      return line >= c.start_line and line <= c.end_line
+    if c_start and c_end then
+      return line >= c_start and line <= c_end
     end
     return false
   end, comments)

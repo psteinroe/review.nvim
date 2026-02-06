@@ -6,9 +6,12 @@ A Neovim plugin for efficient code reviews with GitHub integration and AI feedba
 
 - **Local diff review** - Review AI-generated or manual code changes
 - **GitHub PR review** - Full comment integration with GitHub PRs
+- **Hybrid mode** - Auto-detects PR branch, shows file provenance (pushed/local/uncommitted)
 - **AI feedback loop** - Send reviews to AI providers for iteration
 - **Editable diffs** - Fix issues directly while reviewing
 - **Unified comments** - Local and GitHub comments in one view
+- **Smart diffing** - Uses merge-base to show only PR changes, not unrelated commits
+- **@mention autocomplete** - Type `@` in comments to autocomplete GitHub usernames
 - **Keyboard-driven** - Everything accessible via keymaps
 
 ## Requirements
@@ -69,25 +72,16 @@ require("review").setup({
   -- GitHub settings
   github = {
     enabled = true,
+    picker_default = "review_requests",  -- "review_requests", "open_prs", "my_prs"
+    picker_show_menu = false,            -- false = go directly to default mode
   },
 
   -- AI provider settings
   ai = {
-    provider = "auto",    -- "auto", "opencode", "claude", "codex", "aider", "avante", "clipboard", "custom"
-    preference = {        -- Auto-detection preference order
-      "opencode",
-      "avante",
-      "claude",
-      "codex",
-      "aider",
-      "clipboard",
-    },
-    instructions = nil,   -- Custom instructions (replaces default)
-    custom_handler = nil, -- Custom handler for "custom" provider
-    terminal = {
-      height = 15,
-      position = "bottom",
-    },
+    provider = "auto",    -- "auto", "opencode", "claude", "codex", "custom"
+    command = nil,        -- Custom command with $PROMPT_FILE placeholder
+    auto_reload = true,   -- Auto-reload buffers when files change
+    on_complete = nil,    -- Callback when AI finishes
   },
 
   -- Virtual text (inline comment preview)
@@ -105,18 +99,21 @@ require("review").setup({
 
 | Command | Description |
 |---------|-------------|
-| `:Review` | Open local diff against HEAD |
+| `:Review` | Auto-detect: hybrid mode if on PR branch, else local diff |
 | `:Review {base}` | Open local diff against branch/commit |
 | `:Review pr` | Open PR picker |
 | `:Review pr {number}` | Open specific PR |
+| `:Review next` | Open next unreviewed PR from review requests |
 | `:Review close` | Close review session |
 | `:Review panel` | Toggle PR panel |
 | `:Review refresh` | Refresh current review |
 | `:Review status` | Show review status |
-| `:ReviewAI` | Send to configured AI provider |
-| `:ReviewAI {provider}` | Send to specific provider |
+| `:ReviewAI` | Send to AI (opens editable prompt) |
 | `:ReviewAI pick` | Show provider picker |
 | `:ReviewAI clipboard` | Copy to clipboard |
+| `:ReviewAICancel` | Cancel running AI job |
+| `:ReviewAIStatus` | Show AI job status |
+| `:ReviewAIOutput` | Show AI job output |
 | `:ReviewComment` | Add note comment at cursor |
 | `:ReviewComment {type}` | Add comment (note/issue/suggestion/praise) |
 
@@ -156,6 +153,9 @@ All keymaps are active when a review session is open.
 | `<leader>rp` | Toggle PR panel |
 | `<leader>rf` | Focus file tree |
 | `<leader>rd` | Focus diff view |
+| `<leader>rD` | Toggle diff split (hide/show base version) |
+| `<leader>rq` | Close review |
+| `<leader>rn` | Accept current file and open next |
 
 #### Comment Actions
 
@@ -167,7 +167,7 @@ All keymaps are active when a review session is open.
 | `<leader>cp` | Add praise comment |
 | `<leader>ce` | Edit comment at cursor |
 | `<leader>cd` | Delete comment at cursor |
-| `K` | Show comment popup |
+| `K` | Show comment popup (interactive) |
 | `r` | Reply to comment |
 | `R` | Toggle resolve status |
 
@@ -176,12 +176,14 @@ All keymaps are active when a review session is open.
 | Keymap | Action |
 |--------|--------|
 | `<leader>rC` | Add conversation comment |
-| `<leader>rs` | Send to AI |
+| `<leader>rs` | Send to AI (opens editable prompt) |
 | `<leader>rS` | Pick AI provider |
+| `<leader>rX` | Cancel running AI job |
 | `<leader>ry` | Copy to clipboard |
 | `<leader>rg` | Submit to GitHub |
 | `<leader>ra` | Approve PR |
 | `<leader>rx` | Request changes |
+| `<leader>rG` | Submit as comment (no approval decision) |
 
 #### Pickers
 
@@ -190,19 +192,32 @@ All keymaps are active when a review session is open.
 | `<leader>rr` | Pick from review requests |
 | `<leader>rl` | Pick from open PRs |
 
-### File Tree Symbols
+### File Tree Layout
 
-Each file in the tree is displayed as: `{reviewed} {status} {path} {comments}`
+Files are grouped by directory with collapsible sections:
 
-**Reviewed status (first column):**
+```
+PR #123 (12 files)
+main ← feat/auth
+3/12 reviewed
+
+▼ src/components/               4
+  ✓ M LoginForm.tsx             3
+  · A AuthProvider.tsx
+▶ tests/                        1
+```
+
+**Directory headers:**
+| Symbol | Meaning |
+|--------|---------|
+| `▼` | Directory expanded (files visible) |
+| `▶` | Directory collapsed (files hidden) |
+
+**File lines (indented under directories):**
 | Symbol | Meaning |
 |--------|---------|
 | `✓` | File reviewed (staged in local mode, viewed in PR mode) |
 | `·` | File pending review |
-
-**Git status (second column):**
-| Symbol | Meaning |
-|--------|---------|
 | `A` | Added (new file) |
 | `M` | Modified |
 | `D` | Deleted |
@@ -216,19 +231,26 @@ Each file in the tree is displayed as: `{reviewed} {status} {path} {comments}`
 
 ### File Tree Keymaps
 
-When focused on the file tree:
+Fugitive-style keybindings when focused on the file tree:
 
 | Keymap | Action |
 |--------|--------|
-| `<CR>` / `o` / `l` | Open file |
-| `j` / `<Down>` | Next file |
-| `k` / `<Up>` | Previous file |
-| `<Space>` / `x` / `s` | Toggle reviewed (stages file in local mode) |
+| `<CR>` / `o` | Open file or toggle directory |
+| `=` | Toggle expand/collapse directory |
+| `h` | Collapse directory |
+| `l` | Expand directory or open file |
+| `j` / `k` / `(` / `)` | Navigate files |
+| `-` | Toggle reviewed/staged |
+| `s` | Stage file (mark reviewed) |
+| `u` | Unstage file (mark unreviewed) |
+| `<Space>` / `x` | Toggle reviewed (alias) |
+| `zM` | Collapse all directories |
+| `zR` | Expand all directories |
 | `<Tab>` | Next hunk (across files) |
 | `<S-Tab>` | Previous hunk (across files) |
+| `/` | Filter files |
 | `R` | Refresh files from git |
 | `q` | Close review |
-| Mouse click | Open file |
 
 ### Comment Input Keymaps
 
@@ -239,6 +261,28 @@ When typing a comment in the floating input window:
 | `<C-s>` | Save comment (insert or normal mode) |
 | `<CR>` | Save comment (normal mode only) |
 | `<C-c>` | Cancel comment |
+| `@` | Trigger @mention autocomplete (PR mode) |
+| `<C-x><C-o>` | Manual autocomplete trigger |
+
+### Comment Popup Keymaps
+
+When viewing a comment with `K`:
+
+**For local comments:**
+| Keymap | Action |
+|--------|--------|
+| `e` | Edit comment |
+| `d` | Delete comment |
+| `q` / `<Esc>` | Close popup |
+
+**For GitHub comments:**
+| Keymap | Action |
+|--------|--------|
+| `r` | Reply to comment |
+| `R` | Resolve/unresolve thread |
+| `+` | Add emoji reaction (picker) |
+| `1`-`7` | Quick reactions (👍👎😄🎉❤️🚀👀) |
+| `q` / `<Esc>` | Close popup |
 
 ### Diff View Keymaps
 
@@ -256,10 +300,11 @@ When focused on the diff view:
 
 1. AI generates code changes
 2. Run `:Review` to see diff
-3. Add comments with `<leader>cc`
-4. Send to AI with `<leader>rs`
-5. AI fixes issues
-6. Repeat until satisfied
+3. Add comments with `<leader>cc` (note), `<leader>ci` (issue), `<leader>cs` (suggestion)
+4. Send to AI with `<leader>rs` (opens editable prompt - add instructions at top, edit as needed, `Ctrl-s` to send)
+5. AI fixes issues (progress shown in floating indicator)
+6. Hide diff with `<leader>rD` to make direct edits, toggle back to see changes
+7. Repeat until satisfied
 
 ### GitHub PR Review
 
@@ -269,6 +314,44 @@ When focused on the diff view:
 4. Add new comments (pending locally)
 5. Reply to existing threads with `r`
 6. Submit review with `<leader>rg`
+
+### Hybrid Mode (Auto-Detected)
+
+When you're on a branch with an open PR, `:Review` automatically opens in hybrid mode:
+
+1. Shows all changes (pushed, local commits, uncommitted)
+2. Each file shows **provenance**: where changes come from
+3. Uses **merge-base** for diffing (only shows your PR's changes, not unrelated commits on main)
+4. Comments on pushed files sync with GitHub
+5. Comments on local/uncommitted files stay local
+
+**Provenance indicators in file tree:**
+| Symbol | Meaning |
+|--------|---------|
+| `↑` | Pushed to remote (visible on GitHub) |
+| `○` | Local commits (not yet pushed) |
+| `~` | Uncommitted changes |
+| `↑○` | Both pushed and local changes |
+
+### PR Picker
+
+The PR picker (`:Review pr`) shows your review status for each PR:
+
+| Symbol | Meaning |
+|--------|---------|
+| `○` | Not yet reviewed |
+| `✓` | You approved |
+| `✗` | You requested changes |
+| `◐` | You commented |
+
+After approving or requesting changes, you'll be prompted to open the next unreviewed PR.
+
+### Commentable Lines
+
+In PR mode, only lines within the diff can receive comments (GitHub limitation). Visual markers show commentable lines:
+
+- `▎` in the gutter indicates a commentable line
+- Attempting to comment elsewhere shows a warning
 
 ## API
 
@@ -294,9 +377,8 @@ review.add_comment("suggestion")  -- Add suggestion
 review.add_comment("praise")      -- Add praise
 
 -- AI integration
-review.send_to_ai()           -- Send to configured provider
-review.send_to_ai("claude")   -- Send to specific provider
-review.send_to_clipboard()    -- Copy to clipboard
+review.send_to_ai()           -- Open editable prompt and send to AI
+review.send_to_clipboard()    -- Copy prompt to clipboard
 
 -- State inspection
 review.is_active()    -- Check if session active

@@ -718,36 +718,243 @@ end
 -- User Interface
 -- ============================================================================
 
----Prompt user for extra instructions and send to AI
+---Send prompt directly (bypassing build_prompt, for edited prompts)
+---@param prompt string The full prompt to send
+---@param comment_ids string[] Comment IDs to mark as processing
+function M.send_raw(prompt, comment_ids)
+  if current_job then
+    vim.notify("AI job already running", vim.log.levels.WARN)
+    return
+  end
+
+  local provider = M.get_provider()
+  if not provider then
+    vim.notify("No AI provider available. Install opencode, claude, or codex.", vim.log.levels.ERROR)
+    return
+  end
+
+  local command_template = M.get_command(provider)
+  if not command_template then
+    vim.notify("No command configured for provider: " .. provider, vim.log.levels.ERROR)
+    return
+  end
+
+  -- Write prompt to temp file
+  local prompt_file = vim.fn.tempname()
+  local f = io.open(prompt_file, "w")
+  if not f then
+    vim.notify("Failed to create temp file for prompt", vim.log.levels.ERROR)
+    return
+  end
+  f:write(prompt)
+  f:close()
+
+  -- Build command
+  local command = command_template:gsub("%$PROMPT_FILE", prompt_file)
+
+  -- Mark comments as processing
+  mark_comments_processing(comment_ids)
+
+  -- Start file watcher
+  local watcher = start_file_watcher()
+
+  -- Determine working directory
+  local cwd = git.root_dir() or vim.fn.getcwd()
+
+  -- Clear previous output
+  job_output = {}
+  table.insert(job_output, "=== Command ===")
+  table.insert(job_output, command:sub(1, 500))
+  table.insert(job_output, "=== CWD: " .. cwd .. " ===")
+  table.insert(job_output, "=== Output ===")
+
+  -- Run command in background with PTY
+  local job_id = vim.fn.jobstart(command, {
+    cwd = cwd,
+    pty = true,
+    on_stdout = function(_, data, _)
+      if data then
+        for _, line in ipairs(data) do
+          if line ~= "" then
+            table.insert(job_output, line)
+          end
+        end
+      end
+    end,
+    on_exit = function(_, exit_code, _)
+      vim.schedule(function()
+        close_progress_indicator()
+        if current_job and current_job.watcher then
+          stop_file_watcher(current_job.watcher)
+        end
+        if current_job and current_job.prompt_file then
+          pcall(os.remove, current_job.prompt_file)
+        end
+        mark_comments_complete(comment_ids)
+        current_job = nil
+
+        if exit_code == 0 then
+          vim.notify(string.format("🤖 %s finished successfully", provider), vim.log.levels.INFO)
+        else
+          vim.notify(string.format("🤖 %s exited with code %d", provider, exit_code), vim.log.levels.WARN)
+        end
+
+        pcall(vim.cmd, "checktime")
+        local cfg = config.get("ai") or {}
+        if cfg.on_complete then
+          pcall(cfg.on_complete)
+        end
+
+        local diff = utils.safe_require("review.ui.diff")
+        if diff and state.is_active() then
+          diff.refresh()
+          diff.refresh_decorations()
+        end
+      end)
+    end,
+  })
+
+  if job_id <= 0 then
+    local err_msg = job_id == 0 and "invalid arguments" or "command not executable"
+    vim.notify("Failed to start AI job: " .. err_msg, vim.log.levels.ERROR)
+    table.insert(job_output, "=== FAILED TO START: " .. err_msg .. " ===")
+    reset_comments_pending(comment_ids)
+    if watcher then
+      stop_file_watcher(watcher)
+    end
+    pcall(os.remove, prompt_file)
+    return
+  end
+
+  table.insert(job_output, "=== Job started with ID: " .. job_id .. " ===")
+
+  current_job = {
+    id = job_id,
+    provider = provider,
+    comment_ids = comment_ids,
+    start_time = os.time(),
+    watcher = watcher,
+    command = command,
+    cwd = cwd,
+    prompt_file = prompt_file,
+  }
+
+  show_progress_indicator(provider)
+  vim.notify(string.format("🤖 Sending to %s (job %d)", provider, job_id), vim.log.levels.INFO)
+end
+
+---Show full prompt in editable buffer and send on confirm
 ---@param opts? {comments?: Review.Comment[]}
 function M.send_with_prompt(opts)
   opts = opts or {}
 
-  local float = utils.safe_require("review.ui.float")
-  if not float then
-    -- Fallback to simple input
-    vim.ui.input({ prompt = "Additional instructions (optional): " }, function(extra)
-      if extra == nil then
-        return -- User cancelled
-      end
-      M.send({ comments = opts.comments, extra = extra ~= "" and extra or nil })
-    end)
+  -- Get comments to process
+  local comments = opts.comments or state.get_pending_comments()
+  if #comments == 0 then
+    vim.notify("No pending comments to send to AI", vim.log.levels.INFO)
     return
   end
 
-  float.multiline_input({
-    prompt = "Additional instructions for AI (optional, leave empty to skip)",
-    filetype = "markdown",
-  }, function(lines)
-    local extra = nil
-    if lines and #lines > 0 then
-      local text = table.concat(lines, "\n")
-      if text:match("%S") then -- Has non-whitespace
-        extra = text
+  -- Build the full prompt
+  local prompt = M.build_prompt(comments, nil)
+
+  -- Prepare content with space for custom instructions at the top
+  local header = "\n\n"
+  local separator = "# ─── Review prompt (edit as needed) ───\n\n"
+  local content = header .. separator .. prompt
+
+  -- Get comment IDs for tracking
+  local comment_ids = {}
+  for _, comment in ipairs(comments) do
+    table.insert(comment_ids, comment.id)
+  end
+
+  -- Create buffer
+  local buf = vim.api.nvim_create_buf(false, true)
+  local lines = vim.split(content, "\n")
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+
+  -- Buffer options
+  vim.bo[buf].buftype = "nofile"
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].filetype = "markdown"
+  vim.bo[buf].modifiable = true
+
+  -- Calculate window size (large, centered)
+  local width = math.min(120, vim.o.columns - 10)
+  local height = math.min(40, vim.o.lines - 6)
+  local col = math.floor((vim.o.columns - width) / 2)
+  local row = math.floor((vim.o.lines - height) / 2)
+
+  -- Create floating window
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor",
+    width = width,
+    height = height,
+    col = col,
+    row = row,
+    style = "minimal",
+    border = "rounded",
+    title = " 🤖 Edit AI Prompt (Ctrl-s to send, q/Esc to cancel) ",
+    title_pos = "center",
+  })
+
+  -- Window options
+  vim.wo[win].wrap = true
+  vim.wo[win].linebreak = true
+  vim.wo[win].cursorline = true
+
+  -- Position cursor at line 1 (ready to type instructions)
+  vim.api.nvim_win_set_cursor(win, { 1, 0 })
+
+  -- Start in insert mode
+  vim.cmd("startinsert")
+
+  -- Helper to close window
+  local function close_window()
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_close(win, true)
+    end
+  end
+
+  -- Helper to send the prompt
+  local function send_prompt()
+    local all_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+
+    -- Remove the separator line but keep everything else
+    local cleaned_lines = {}
+    for _, line in ipairs(all_lines) do
+      if not line:match("^# ─── Review prompt") then
+        table.insert(cleaned_lines, line)
       end
     end
-    M.send({ comments = opts.comments, extra = extra })
-  end)
+
+    local final_prompt = table.concat(cleaned_lines, "\n")
+    -- Trim leading/trailing whitespace
+    final_prompt = final_prompt:gsub("^%s+", ""):gsub("%s+$", "")
+
+    close_window()
+
+    if final_prompt == "" then
+      vim.notify("Empty prompt, cancelled", vim.log.levels.INFO)
+      return
+    end
+
+    M.send_raw(final_prompt, comment_ids)
+  end
+
+  -- Keymaps
+  local kopts = { buffer = buf, nowait = true, silent = true }
+
+  -- Send with Ctrl-s (works in both modes)
+  vim.keymap.set({ "n", "i" }, "<C-s>", send_prompt, kopts)
+
+  -- Cancel with q (normal mode) or Esc
+  vim.keymap.set("n", "q", close_window, kopts)
+  vim.keymap.set("n", "<Esc>", close_window, kopts)
+
+  -- Also allow Ctrl-c to cancel
+  vim.keymap.set({ "n", "i" }, "<C-c>", close_window, kopts)
 end
 
 -- ============================================================================

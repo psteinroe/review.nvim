@@ -209,7 +209,8 @@ end
 function M.get_comment_icon(comment)
   -- Delegate to virtual_text module for consistency
   local virtual_text = require("review.ui.virtual_text")
-  return virtual_text.get_icon(comment)
+  local icon, _, _ = virtual_text.get_status_info(comment)
+  return icon
 end
 
 ---Format a comment for display in a floating window
@@ -244,49 +245,154 @@ function M.format_comment(comment)
     end
   end
 
+  -- Reactions (for GitHub comments)
+  if comment.github_id then
+    local github = require("review.integrations.github")
+    local reactions = github.get_comment_reactions(comment.github_id)
+    if reactions and #reactions > 0 then
+      table.insert(lines, "")
+      table.insert(lines, github.format_reactions(reactions))
+    end
+  end
+
   -- Actions hint
   table.insert(lines, "")
   if comment.kind == "local" then
-    table.insert(lines, "[e]dit [d]elete")
+    table.insert(lines, "[e]dit [d]elete [q]uit")
   else
-    table.insert(lines, "[r]eply [R]esolve")
+    table.insert(lines, "[r]eply [R]esolve [+]react [q]uit")
   end
 
   return lines
 end
 
----Show a comment in a floating window
+---Show a comment in a floating window with interactive keymaps
 ---@param comment Review.Comment
 ---@param opts? {close_on_cursor_move?: boolean, keymaps?: boolean}
 ---@return number? win_id Window ID or nil
 ---@return number? buf_id Buffer ID or nil
 function M.show_comment(comment, opts)
   opts = opts or {}
-  local close_on_cursor_move = opts.close_on_cursor_move ~= false
+  local enable_keymaps = opts.keymaps ~= false
 
   local lines = M.format_comment(comment)
   local win, buf = M.create(lines, {
     filetype = "markdown",
     modifiable = false,
-    enter = false,
+    enter = true, -- Enter the window to allow keymaps
   })
 
-  if not win then
+  if not win or not buf then
     return nil, nil
   end
 
-  -- Setup auto-close on cursor move
-  if close_on_cursor_move then
-    local augroup = vim.api.nvim_create_augroup("ReviewFloatAutoClose", { clear = true })
-    vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "BufLeave" }, {
-      group = augroup,
-      once = true,
-      callback = function()
-        M.close(win)
-        vim.api.nvim_del_augroup_by_id(augroup)
-      end,
-    })
+  local function close_popup()
+    M.close(win)
   end
+
+  -- Setup keymaps for actions
+  if enable_keymaps then
+    local keymap_opts = { buffer = buf, nowait = true, silent = true }
+
+    -- Close with q or Escape
+    vim.keymap.set("n", "q", close_popup, keymap_opts)
+    vim.keymap.set("n", "<Esc>", close_popup, keymap_opts)
+
+    if comment.kind == "local" then
+      -- Edit local comment
+      vim.keymap.set("n", "e", function()
+        close_popup()
+        vim.schedule(function()
+          local comments = require("review.core.comments")
+          local float = require("review.ui.float")
+          float.multiline_input({
+            prompt = "Edit comment",
+            default = comment.body,
+          }, function(new_lines)
+            if new_lines and #new_lines > 0 then
+              local body = table.concat(new_lines, "\n")
+              comments.edit(comment.id, body)
+              local keymaps = require("review.keymaps")
+              keymaps.refresh_ui()
+              vim.notify("Comment updated", vim.log.levels.INFO)
+            end
+          end)
+        end)
+      end, keymap_opts)
+
+      -- Delete local comment
+      vim.keymap.set("n", "d", function()
+        close_popup()
+        vim.schedule(function()
+          local comments = require("review.core.comments")
+          comments.delete(comment.id)
+          local keymaps = require("review.keymaps")
+          keymaps.refresh_ui()
+          vim.notify("Comment deleted", vim.log.levels.INFO)
+        end)
+      end, keymap_opts)
+    else
+      -- Reply to GitHub comment
+      vim.keymap.set("n", "r", function()
+        close_popup()
+        vim.schedule(function()
+          local github = require("review.integrations.github")
+          github.reply_to_comment_prompt(comment)
+        end)
+      end, keymap_opts)
+
+      -- Resolve/unresolve thread
+      vim.keymap.set("n", "R", function()
+        close_popup()
+        vim.schedule(function()
+          local github = require("review.integrations.github")
+          github.toggle_thread_resolved(comment)
+        end)
+      end, keymap_opts)
+
+      -- Add reaction (only for GitHub comments)
+      if comment.github_id then
+        vim.keymap.set("n", "+", function()
+          close_popup()
+          vim.schedule(function()
+            local github = require("review.integrations.github")
+            github.pick_reaction(comment)
+          end)
+        end, keymap_opts)
+
+        -- Quick reactions with number keys
+        local quick_reactions = {
+          ["1"] = "+1",
+          ["2"] = "-1",
+          ["3"] = "laugh",
+          ["4"] = "hooray",
+          ["5"] = "heart",
+          ["6"] = "rocket",
+          ["7"] = "eyes",
+        }
+        for key, reaction in pairs(quick_reactions) do
+          vim.keymap.set("n", key, function()
+            close_popup()
+            vim.schedule(function()
+              local github = require("review.integrations.github")
+              github.add_reaction(comment.github_id, reaction)
+            end)
+          end, keymap_opts)
+        end
+      end
+    end
+  end
+
+  -- Close on BufLeave (when user switches to another buffer)
+  vim.api.nvim_create_autocmd("BufLeave", {
+    buffer = buf,
+    once = true,
+    callback = function()
+      vim.schedule(function()
+        M.close(win)
+      end)
+    end,
+  })
 
   return win, buf
 end
@@ -301,6 +407,72 @@ function M.input(prompt, opts, callback)
     prompt = prompt,
     default = opts.default,
   }, callback)
+end
+
+---Setup @mention completion for a buffer
+---@param buf number Buffer handle
+function M.setup_mention_completion(buf)
+  -- Create completion function for @mentions
+  local function mention_complete(findstart, base)
+    if findstart == 1 then
+      -- Find the start of the @mention
+      local line = vim.api.nvim_get_current_line()
+      local col = vim.api.nvim_win_get_cursor(0)[2]
+      local start = col
+      while start > 0 and line:sub(start, start):match("[%w_%-]") do
+        start = start - 1
+      end
+      -- Check if preceded by @
+      if start > 0 and line:sub(start, start) == "@" then
+        return start -- Return position after @
+      end
+      return -3 -- No completion
+    else
+      -- Get mentionable users
+      local github = require("review.integrations.github")
+      local users = github.fetch_mentionable_users()
+
+      -- Filter by base
+      local matches = {}
+      local pattern = "^" .. vim.pesc(base:lower())
+      for _, user in ipairs(users) do
+        if user:lower():match(pattern) then
+          table.insert(matches, {
+            word = user,
+            abbr = "@" .. user,
+            kind = "User",
+            menu = "[GitHub]",
+          })
+        end
+      end
+      return matches
+    end
+  end
+
+  -- Set up omnifunc
+  vim.api.nvim_buf_set_option(buf, "omnifunc", "v:lua.require'review.ui.float'.mention_omnifunc")
+
+  -- Store the completion function
+  M._mention_complete_fn = mention_complete
+
+  -- Map @ to trigger completion
+  vim.keymap.set("i", "@", function()
+    vim.api.nvim_feedkeys("@", "n", false)
+    vim.schedule(function()
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-x><C-o>", true, false, true), "m", false)
+    end)
+  end, { buffer = buf, silent = true })
+end
+
+---Omnifunc wrapper for @mention completion
+---@param findstart number
+---@param base string
+---@return any
+function M.mention_omnifunc(findstart, base)
+  if M._mention_complete_fn then
+    return M._mention_complete_fn(findstart, base)
+  end
+  return findstart == 1 and -3 or {}
 end
 
 ---Prompt for multi-line input in a floating window with full editing capabilities
@@ -367,6 +539,9 @@ function M.multiline_input(opts, callback)
 
   -- Now set filetype (after buffer options are locked in)
   vim.bo[buf].filetype = opts.filetype or "markdown"
+
+  -- Setup @mention completion
+  M.setup_mention_completion(buf)
 
   -- Track state
   local callback_called = false

@@ -329,6 +329,38 @@ function M.get_line_side(hunk, line)
   return "RIGHT" -- Default to right side
 end
 
+---Check whether commenting should be restricted to diff hunks for a file
+---Returns true when the file's comments would be submitted to GitHub
+---(i.e., lines outside hunks would be rejected by the GitHub API).
+---@param file_path string File path to check
+---@return boolean
+function M.should_restrict_to_hunks(file_path)
+  local ok, st = pcall(require, "review.core.state")
+  if not ok then
+    return false
+  end
+
+  local mode = st.state.mode
+  if mode == "local" then
+    return false
+  end
+
+  if mode == "pr" then
+    return true
+  end
+
+  -- hybrid mode: restrict only for pushed / both provenance
+  if mode == "hybrid" then
+    local file = st.find_file(file_path)
+    if file and (file.provenance == "pushed" or file.provenance == "both") then
+      return true
+    end
+    return false
+  end
+
+  return false
+end
+
 ---Calculate total additions and deletions across all files
 ---@param files Review.File[]
 ---@return {additions: number, deletions: number}

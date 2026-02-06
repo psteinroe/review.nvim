@@ -1,5 +1,5 @@
 -- File tree panel for review.nvim
--- Displays changed files as a flat list with review status
+-- Directory-grouped layout with collapsible sections
 
 local M = {}
 
@@ -11,14 +11,17 @@ local utils = require("review.utils")
 local ns_id = vim.api.nvim_create_namespace("review_file_tree")
 local ns_selection = vim.api.nvim_create_namespace("review_file_tree_selection")
 
----@type number Current selected index (1-indexed, refers to sorted display order)
+---@type number Current selected index (1-indexed, refers to selectable items)
 local selected_idx = 1
 
----@type table<number, number> Line number to display index mapping
-local line_to_display_idx = {}
+---@type table<number, {type: "dir"|"file", path: string, dir?: string}> Line number to item mapping
+local line_to_item = {}
 
----@type string[] Sorted file paths (display order)
-local sorted_paths = {}
+---@type string[] Ordered list of selectable items (file paths only)
+local selectable_items = {}
+
+---@type table<string, boolean> Expanded state for directories (true = expanded)
+local expanded_dirs = {}
 
 ---@type number Header line count (for calculating file line offsets)
 local header_lines_count = 0
@@ -41,6 +44,21 @@ function M.get_status_letter(status)
   return result.letter, result.hl
 end
 
+---Get provenance letter for file provenance
+---@param provenance? Review.Provenance
+---@return string letter Single letter provenance
+---@return string highlight
+function M.get_provenance_letter(provenance)
+  local mapping = {
+    pushed = { letter = "P", hl = "ReviewTreePushed" },
+    ["local"] = { letter = "L", hl = "ReviewTreeLocal" },
+    uncommitted = { letter = "U", hl = "ReviewTreeUncommitted" },
+    both = { letter = "B", hl = "ReviewTreeBoth" },
+  }
+  local result = mapping[provenance] or { letter = " ", hl = "ReviewTreeFile" }
+  return result.letter, result.hl
+end
+
 ---Get reviewed icon
 ---@param reviewed boolean
 ---@return string icon
@@ -57,6 +75,14 @@ end
 ---@param file Review.File
 ---@return boolean
 function M.matches_filter(file)
+  -- Check provenance filter first (from state, set by gP/gL/gU/gA keybindings)
+  local prov_filter = state.state.provenance_filter
+  if prov_filter then
+    if file.provenance ~= prov_filter then
+      return false
+    end
+  end
+
   if not filter_pattern or filter_pattern == "" then
     return true
   end
@@ -91,6 +117,142 @@ function M.matches_filter(file)
   return file.path:lower():find(pattern, 1, true) ~= nil
 end
 
+---Get directory from file path
+---@param path string
+---@return string dir Directory path (empty string for root files)
+---@return string filename Just the filename
+function M.split_path(path)
+  local last_slash = path:match(".*/()")
+  if last_slash then
+    -- last_slash is position after the slash, so -2 to exclude the slash itself
+    return path:sub(1, last_slash - 2), path:sub(last_slash)
+  end
+  return "", path
+end
+
+---Group files by directory
+---@param files Review.File[]
+---@return table<string, Review.File[]> Grouped files by directory
+---@return string[] Sorted directory list
+function M.group_files_by_directory(files)
+  -- Sort all files by full path first (oil.nvim style)
+  local sorted_files = vim.tbl_map(function(f) return f end, files)
+  table.sort(sorted_files, function(a, b)
+    return a.path < b.path
+  end)
+
+  local groups = {}
+  local dirs = {}
+  local seen_dirs = {}
+
+  for _, file in ipairs(sorted_files) do
+    local dir, _ = M.split_path(file.path)
+    if not seen_dirs[dir] then
+      seen_dirs[dir] = true
+      groups[dir] = {}
+      table.insert(dirs, dir)
+    end
+    table.insert(groups[dir], file)
+  end
+
+  -- Directories are already in sorted order since files were sorted by path
+
+  return groups, dirs
+end
+
+---Check if a directory is expanded
+---@param dir string Directory path
+---@return boolean
+function M.is_expanded(dir)
+  -- Default to expanded
+  if expanded_dirs[dir] == nil then
+    return true
+  end
+  return expanded_dirs[dir]
+end
+
+---Build selectable items from state files (for use without full render)
+---@private
+local function build_selectable_items()
+  selectable_items = {}
+
+  local files = state.state.files or {}
+  local filtered_files = {}
+  for _, file in ipairs(files) do
+    if M.matches_filter(file) then
+      table.insert(filtered_files, file)
+    end
+  end
+
+  -- Group files by directory
+  local groups, dirs = M.group_files_by_directory(filtered_files)
+
+  -- Add files from expanded directories (all expanded by default)
+  for _, dir in ipairs(dirs) do
+    local is_expanded = M.is_expanded(dir)
+    if is_expanded then
+      local dir_files = groups[dir]
+      for _, file in ipairs(dir_files) do
+        table.insert(selectable_items, file.path)
+      end
+    end
+  end
+
+  -- Clamp selected index
+  if #selectable_items > 0 then
+    selected_idx = math.max(1, math.min(selected_idx, #selectable_items))
+  else
+    selected_idx = 1
+  end
+end
+
+---Toggle directory expansion
+---@param dir string Directory path
+function M.toggle_directory(dir)
+  if expanded_dirs[dir] == nil then
+    expanded_dirs[dir] = false -- Was expanded (default), now collapse
+  else
+    expanded_dirs[dir] = not expanded_dirs[dir]
+  end
+
+  -- Update selectable items to reflect expansion change
+  build_selectable_items()
+  M.render()
+
+  -- Move cursor to the toggled directory line
+  local win = state.state.layout.file_tree_win
+  if win and vim.api.nvim_win_is_valid(win) then
+    for line_nr, item in pairs(line_to_item) do
+      if item.type == "dir" and item.path == dir then
+        vim.api.nvim_win_set_cursor(win, { line_nr, 0 })
+        break
+      end
+    end
+  end
+end
+
+---Expand all directories
+function M.expand_all()
+  for dir, _ in pairs(expanded_dirs) do
+    expanded_dirs[dir] = true
+  end
+  -- Update selectable items to reflect expansion change
+  build_selectable_items()
+  M.render()
+end
+
+---Collapse all directories
+function M.collapse_all()
+  -- Get all directories from current state
+  local groups, dirs = M.group_files_by_directory(state.state.files)
+  for _, dir in ipairs(dirs) do
+    expanded_dirs[dir] = false
+  end
+  -- Update selectable items to reflect expansion change
+  build_selectable_items()
+  M.render()
+end
+
 ---Render the header based on mode
 ---@return string[] lines
 ---@return table[] highlights
@@ -98,10 +260,31 @@ function M.render_header()
   local lines = {}
   local highlights = {}
 
-  if state.state.mode == "pr" and state.state.pr then
+  if state.state.mode == "hybrid" and state.state.pr then
+    -- Hybrid Mode header
+    local pr = state.state.pr
+    local line1 = string.format("PR #%d (%d files)", pr.number, #state.state.files)
+    table.insert(lines, line1)
+    table.insert(highlights, {
+      line = 1,
+      col_start = 0,
+      col_end = #line1,
+      hl_group = "ReviewTreeHeader",
+    })
+
+    -- Branch info
+    local line2 = string.format("%s ← %s", pr.base, pr.branch)
+    table.insert(lines, line2)
+    table.insert(highlights, {
+      line = 2,
+      col_start = 0,
+      col_end = #line2,
+      hl_group = "ReviewTreeStats",
+    })
+  elseif state.state.mode == "pr" and state.state.pr then
     -- PR Mode header
     local pr = state.state.pr
-    local line1 = string.format("PR #%d", pr.number)
+    local line1 = string.format("PR #%d (%d files)", pr.number, #state.state.files)
     table.insert(lines, line1)
     table.insert(highlights, {
       line = 1,
@@ -122,7 +305,7 @@ function M.render_header()
   else
     -- Local mode header
     local base = state.state.base or "HEAD"
-    local line1 = string.format("Local • %s", base)
+    local line1 = string.format("Local • %s (%d files)", base, #state.state.files)
     table.insert(lines, line1)
     table.insert(highlights, {
       line = 1,
@@ -134,7 +317,7 @@ function M.render_header()
 
   -- Progress line
   local stats = state.get_stats()
-  local line3 = string.format("%d of %d reviewed", stats.reviewed_files, stats.total_files)
+  local line3 = string.format("%d/%d reviewed", stats.reviewed_files, stats.total_files)
   table.insert(lines, line3)
   table.insert(highlights, {
     line = #lines,
@@ -161,13 +344,96 @@ function M.render_header()
     })
   end
 
+  -- Provenance filter indicator (if active)
+  local prov_filter = state.state.provenance_filter
+  if prov_filter then
+    local prov_names = {
+      pushed = "Pushed only",
+      ["local"] = "Local only",
+      uncommitted = "Uncommitted only",
+      both = "Both only",
+    }
+    local prov_line = string.format("Showing: %s", prov_names[prov_filter] or prov_filter)
+    table.insert(lines, prov_line)
+    table.insert(highlights, {
+      line = #lines,
+      col_start = 0,
+      col_end = #prov_line,
+      hl_group = "ReviewTreeStats",
+    })
+  end
+
   -- Blank line separator
   table.insert(lines, "")
 
   return lines, highlights
 end
 
----Render a single file line
+---Render a directory header line
+---@param dir string Directory path
+---@param file_count number Number of files in directory
+---@param line_nr number Line number (1-indexed)
+---@param buf_width number Buffer width
+---@return string line
+---@return table[] highlights
+function M.render_directory_header(dir, file_count, line_nr, buf_width)
+  local highlights = {}
+  local is_expanded = M.is_expanded(dir)
+
+  -- Expand/collapse indicator
+  local indicator = is_expanded and "▼" or "▶"
+
+  -- Directory name (use ./ for root files)
+  local dir_display = dir ~= "" and (dir .. "/") or "./"
+
+  -- File count suffix
+  local count_suffix = string.format("%d", file_count)
+
+  -- Build line with right-aligned count
+  local prefix = indicator .. " "
+  local main_content = prefix .. dir_display
+  local available = buf_width - #main_content - #count_suffix - 1
+  local padding = ""
+  if available > 0 then
+    padding = string.rep(" ", available)
+  else
+    padding = " "
+  end
+
+  local line = main_content .. padding .. count_suffix
+
+  -- Highlights
+  local col = 0
+
+  -- Indicator highlight
+  table.insert(highlights, {
+    line = line_nr,
+    col_start = col,
+    col_end = col + #indicator,
+    hl_group = "ReviewTreeDirIndicator",
+  })
+  col = col + #prefix
+
+  -- Directory name highlight
+  table.insert(highlights, {
+    line = line_nr,
+    col_start = col,
+    col_end = col + #dir_display,
+    hl_group = "ReviewTreeDir",
+  })
+
+  -- Count highlight
+  table.insert(highlights, {
+    line = line_nr,
+    col_start = #line - #count_suffix,
+    col_end = #line,
+    hl_group = "ReviewTreeStats",
+  })
+
+  return line, highlights
+end
+
+---Render a single file line (filename only, indented)
 ---@param file Review.File
 ---@param line_nr number Line number (1-indexed)
 ---@param buf_width number Buffer width for right-alignment
@@ -180,24 +446,28 @@ function M.render_file_line(file, line_nr, buf_width)
   local reviewed_icon, reviewed_hl = M.get_reviewed_icon(file.reviewed or false)
   local status_letter, status_hl = M.get_status_letter(file.status)
 
+  -- Get provenance letter (only shown in hybrid mode)
+  local provenance_letter, provenance_hl = "", "ReviewTreeFile"
+  local show_provenance = state.state.mode == "hybrid" and file.provenance
+  if show_provenance then
+    provenance_letter, provenance_hl = M.get_provenance_letter(file.provenance)
+  end
+
   -- Get comment info
   local comment_count, has_pending = state.get_file_comment_info(file.path)
 
-  -- Build the line: "{reviewed} {status} {path}"
-  local prefix = reviewed_icon .. " " .. status_letter .. " "
+  -- Get just the filename (directory is shown in header)
+  local _, filename = M.split_path(file.path)
 
-  -- Split path into directory and filename for highlighting
-  local path = file.path
-  local dir_part = ""
-  local file_part = path
-  local last_slash = path:match(".*/()")
-  if last_slash then
-    dir_part = path:sub(1, last_slash - 1)
-    file_part = path:sub(last_slash)
+  -- Build the line with indent: "  {reviewed} {provenance} {status} {filename}"
+  local indent = "  "
+  local prefix
+  if show_provenance then
+    prefix = reviewed_icon .. " " .. provenance_letter .. " " .. status_letter .. " "
+  else
+    prefix = reviewed_icon .. " " .. status_letter .. " "
   end
-
-  -- Build main line content
-  local main_content = prefix .. path
+  local main_content = indent .. prefix .. filename
 
   -- Build comment suffix
   local comment_suffix = ""
@@ -222,7 +492,7 @@ function M.render_file_line(file, line_nr, buf_width)
   local line = main_content .. padding .. comment_suffix
 
   -- Highlights
-  local col = 0
+  local col = #indent
 
   -- Reviewed icon highlight
   table.insert(highlights, {
@@ -233,6 +503,17 @@ function M.render_file_line(file, line_nr, buf_width)
   })
   col = col + #reviewed_icon + 1 -- +1 for space
 
+  -- Provenance letter highlight (only in hybrid mode)
+  if show_provenance then
+    table.insert(highlights, {
+      line = line_nr,
+      col_start = col,
+      col_end = col + #provenance_letter,
+      hl_group = provenance_hl,
+    })
+    col = col + #provenance_letter + 1 -- +1 for space
+  end
+
   -- Status letter highlight
   table.insert(highlights, {
     line = line_nr,
@@ -242,16 +523,6 @@ function M.render_file_line(file, line_nr, buf_width)
   })
   col = col + #status_letter + 1 -- +1 for space
 
-  -- Directory part highlight (dimmed)
-  if #dir_part > 0 then
-    table.insert(highlights, {
-      line = line_nr,
-      col_start = col,
-      col_end = col + #dir_part,
-      hl_group = "ReviewTreePath",
-    })
-  end
-
   -- Filename highlight
   local file_hl = "ReviewTreeFileName"
   if file.path == state.state.current_file then
@@ -259,8 +530,8 @@ function M.render_file_line(file, line_nr, buf_width)
   end
   table.insert(highlights, {
     line = line_nr,
-    col_start = col + #dir_part,
-    col_end = col + #path,
+    col_start = col,
+    col_end = col + #filename,
     hl_group = file_hl,
   })
 
@@ -287,6 +558,32 @@ function M.render_footer()
   -- Blank line separator
   table.insert(lines, "")
 
+  -- Provenance summary for hybrid mode
+  if state.state.mode == "hybrid" then
+    local prov_stats = state.get_provenance_stats()
+    local prov_parts = {}
+    if prov_stats.pushed > 0 then
+      table.insert(prov_parts, string.format("%d pushed", prov_stats.pushed))
+    end
+    if prov_stats.local_commits > 0 then
+      table.insert(prov_parts, string.format("%d local", prov_stats.local_commits))
+    end
+    if prov_stats.uncommitted > 0 then
+      table.insert(prov_parts, string.format("%d uncommitted", prov_stats.uncommitted))
+    end
+
+    if #prov_parts > 0 then
+      local prov_line = table.concat(prov_parts, " • ")
+      table.insert(lines, prov_line)
+      table.insert(highlights, {
+        line = #lines,
+        col_start = 0,
+        col_end = #prov_line,
+        hl_group = "ReviewTreeStats",
+      })
+    end
+  end
+
   -- Count comments
   local thread_count = 0
   local pending_count = 0
@@ -300,7 +597,7 @@ function M.render_footer()
 
   -- Footer line
   local footer_parts = {}
-  if state.state.mode == "pr" then
+  if state.state.mode == "pr" or state.state.mode == "hybrid" then
     if thread_count > 0 then
       table.insert(footer_parts, string.format("%d threads", thread_count))
     end
@@ -346,8 +643,8 @@ function M.render()
   end
 
   -- Clear mappings
-  line_to_display_idx = {}
-  sorted_paths = {}
+  line_to_item = {}
+  selectable_items = {}
 
   local all_lines = {}
   local all_highlights = {}
@@ -363,42 +660,60 @@ function M.render()
     table.insert(all_highlights, hl)
   end
 
-  -- File list (flat, sorted by path, filtered)
-  local files = vim.tbl_map(function(f) return f end, state.state.files)
-  table.sort(files, function(a, b)
-    return a.path < b.path
-  end)
-
-  -- Apply filter
+  -- Get and filter files
+  local files = vim.tbl_map(function(f)
+    return f
+  end, state.state.files)
   local filtered_files = {}
   for _, file in ipairs(files) do
     if M.matches_filter(file) then
       table.insert(filtered_files, file)
     end
   end
-  files = filtered_files
 
-  -- Build sorted paths list for navigation
-  for _, file in ipairs(files) do
-    table.insert(sorted_paths, file.path)
-  end
+  -- Group files by directory
+  local groups, dirs = M.group_files_by_directory(filtered_files)
 
-  for i, file in ipairs(files) do
+  -- Render each directory group
+  for _, dir in ipairs(dirs) do
+    local dir_files = groups[dir]
+    local is_expanded = M.is_expanded(dir)
+
+    -- Directory header line
     local line_nr = #all_lines + 1
-    local line, hl = M.render_file_line(file, line_nr, buf_width)
-    table.insert(all_lines, line)
+    local dir_line, dir_hl = M.render_directory_header(dir, #dir_files, line_nr, buf_width)
+    table.insert(all_lines, dir_line)
 
-    -- Map line number to display index (1-indexed)
-    line_to_display_idx[line_nr] = i
+    -- Map this line to directory
+    line_to_item[line_nr] = { type = "dir", path = dir }
 
-    for _, h in ipairs(hl) do
+    for _, h in ipairs(dir_hl) do
       table.insert(all_highlights, h)
+    end
+
+    -- Render files if expanded
+    if is_expanded then
+      for _, file in ipairs(dir_files) do
+        line_nr = #all_lines + 1
+        local file_line, file_hl = M.render_file_line(file, line_nr, buf_width)
+        table.insert(all_lines, file_line)
+
+        -- Map this line to file
+        line_to_item[line_nr] = { type = "file", path = file.path, dir = dir }
+
+        -- Add to selectable items
+        table.insert(selectable_items, file.path)
+
+        for _, h in ipairs(file_hl) do
+          table.insert(all_highlights, h)
+        end
+      end
     end
   end
 
   -- Clamp selected index to valid range
-  if #sorted_paths > 0 then
-    selected_idx = math.max(1, math.min(selected_idx, #sorted_paths))
+  if #selectable_items > 0 then
+    selected_idx = math.max(1, math.min(selected_idx, #selectable_items))
   else
     selected_idx = 1
   end
@@ -441,10 +756,16 @@ function M.highlight_selected()
   -- Clear previous selection highlight
   vim.api.nvim_buf_clear_namespace(buf, ns_selection, 0, -1)
 
-  -- Find line number for selected display index
+  -- Find line number for selected file
+  if #selectable_items == 0 or selected_idx < 1 or selected_idx > #selectable_items then
+    return
+  end
+
+  local selected_path = selectable_items[selected_idx]
   local target_line = nil
-  for line_nr, display_idx in pairs(line_to_display_idx) do
-    if display_idx == selected_idx then
+
+  for line_nr, item in pairs(line_to_item) do
+    if item.type == "file" and item.path == selected_path then
       target_line = line_nr
       break
     end
@@ -477,7 +798,7 @@ end
 ---Set the selected index (display order)
 ---@param idx number
 function M.set_selected_idx(idx)
-  local num_files = #sorted_paths
+  local num_files = #selectable_items
   if num_files == 0 then
     selected_idx = 1
     return
@@ -486,9 +807,48 @@ function M.set_selected_idx(idx)
   M.highlight_selected()
 end
 
+---Move cursor down to next item line (file or directory)
+function M.cursor_down()
+  local win = state.state.layout.file_tree_win
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+
+  local cursor = vim.api.nvim_win_get_cursor(win)
+  local current_line = cursor[1]
+  local line_count = vim.api.nvim_buf_line_count(state.state.layout.file_tree_buf)
+
+  -- Find next line that has an item (file or directory)
+  for line_nr = current_line + 1, line_count do
+    if line_to_item[line_nr] then
+      vim.api.nvim_win_set_cursor(win, { line_nr, 0 })
+      return
+    end
+  end
+end
+
+---Move cursor up to previous item line (file or directory)
+function M.cursor_up()
+  local win = state.state.layout.file_tree_win
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+
+  local cursor = vim.api.nvim_win_get_cursor(win)
+  local current_line = cursor[1]
+
+  -- Find previous line that has an item (file or directory)
+  for line_nr = current_line - 1, 1, -1 do
+    if line_to_item[line_nr] then
+      vim.api.nvim_win_set_cursor(win, { line_nr, 0 })
+      return
+    end
+  end
+end
+
 ---Select next file
 function M.select_next()
-  local num_files = #sorted_paths
+  local num_files = #selectable_items
   if num_files == 0 then
     return
   end
@@ -502,7 +862,7 @@ end
 
 ---Select previous file
 function M.select_prev()
-  local num_files = #sorted_paths
+  local num_files = #selectable_items
   if num_files == 0 then
     return
   end
@@ -517,10 +877,10 @@ end
 ---Get currently selected file
 ---@return Review.File?
 function M.get_selected_file()
-  if #sorted_paths == 0 or selected_idx < 1 or selected_idx > #sorted_paths then
+  if #selectable_items == 0 or selected_idx < 1 or selected_idx > #selectable_items then
     return nil
   end
-  local path = sorted_paths[selected_idx]
+  local path = selectable_items[selected_idx]
   local file, _ = state.find_file(path)
   return file
 end
@@ -583,9 +943,9 @@ function M.toggle_reviewed()
   return new_status
 end
 
----Get file at cursor position
----@return Review.File?
-function M.get_file_at_cursor()
+---Get item at cursor position
+---@return {type: "dir"|"file", path: string, dir?: string}?
+function M.get_item_at_cursor()
   local win = state.state.layout.file_tree_win
   if not win or not vim.api.nvim_win_is_valid(win) then
     return nil
@@ -593,31 +953,62 @@ function M.get_file_at_cursor()
 
   local cursor = vim.api.nvim_win_get_cursor(win)
   local line_nr = cursor[1]
-  local display_idx = line_to_display_idx[line_nr]
-
-  if display_idx and sorted_paths[display_idx] then
-    local path = sorted_paths[display_idx]
-    local file, _ = state.find_file(path)
-    return file
-  end
-  return nil
+  return line_to_item[line_nr]
 end
 
----Open file at cursor position
+---Get file at cursor position
+---@return Review.File?
+function M.get_file_at_cursor()
+  local item = M.get_item_at_cursor()
+  if not item or item.type ~= "file" then
+    return nil
+  end
+  local file, _ = state.find_file(item.path)
+  return file
+end
+
+---Handle action at cursor (open file or toggle directory)
 ---@return boolean success
-function M.open_at_cursor()
-  local file = M.get_file_at_cursor()
-  if not file then
+function M.action_at_cursor()
+  local item = M.get_item_at_cursor()
+  if not item then
     return false
   end
 
+  if item.type == "dir" then
+    M.toggle_directory(item.path)
+    return true
+  else
+    -- Update selection to match cursor
+    for i, path in ipairs(selectable_items) do
+      if path == item.path then
+        selected_idx = i
+        break
+      end
+    end
+    return M.open_selected()
+  end
+end
+
+---Open file at cursor position (if it's a file)
+---@return boolean success
+function M.open_at_cursor()
+  local item = M.get_item_at_cursor()
+  if not item then
+    return false
+  end
+
+  if item.type == "dir" then
+    -- On directory, toggle it
+    M.toggle_directory(item.path)
+    return true
+  end
+
   -- Update selection to match cursor
-  local win = state.state.layout.file_tree_win
-  if win and vim.api.nvim_win_is_valid(win) then
-    local cursor = vim.api.nvim_win_get_cursor(win)
-    local display_idx = line_to_display_idx[cursor[1]]
-    if display_idx then
-      selected_idx = display_idx
+  for i, path in ipairs(selectable_items) do
+    if path == item.path then
+      selected_idx = i
+      break
     end
   end
 
@@ -633,12 +1024,10 @@ function M.toggle_reviewed_at_cursor()
   end
 
   -- Update selection to match cursor
-  local win = state.state.layout.file_tree_win
-  if win and vim.api.nvim_win_is_valid(win) then
-    local cursor = vim.api.nvim_win_get_cursor(win)
-    local display_idx = line_to_display_idx[cursor[1]]
-    if display_idx then
-      selected_idx = display_idx
+  for i, path in ipairs(selectable_items) do
+    if path == file.path then
+      selected_idx = i
+      break
     end
   end
 
@@ -649,7 +1038,14 @@ end
 ---@param path string
 ---@return boolean success
 function M.select_by_path(path)
-  for i, p in ipairs(sorted_paths) do
+  -- First ensure the directory is expanded
+  local dir, _ = M.split_path(path)
+  if not M.is_expanded(dir) then
+    expanded_dirs[dir] = true
+    M.render()
+  end
+
+  for i, p in ipairs(selectable_items) do
     if p == path then
       selected_idx = i
       M.highlight_selected()
@@ -659,29 +1055,29 @@ function M.select_by_path(path)
   return false
 end
 
----Get line number for display index
----@param display_idx number
+---Get line number for a file path
+---@param path string
 ---@return number?
-function M.get_line_for_file(display_idx)
-  for line_nr, idx in pairs(line_to_display_idx) do
-    if idx == display_idx then
+function M.get_line_for_file(path)
+  for line_nr, item in pairs(line_to_item) do
+    if item.type == "file" and item.path == path then
       return line_nr
     end
   end
   return nil
 end
 
----Get sorted file paths (display order)
+---Get sorted file paths (display order, only from expanded directories)
 ---@return string[]
 function M.get_sorted_paths()
-  return sorted_paths
+  return selectable_items
 end
 
 ---Get display index for a file path
 ---@param path string
 ---@return number? display index (1-indexed)
 function M.get_display_idx_for_path(path)
-  for i, p in ipairs(sorted_paths) do
+  for i, p in ipairs(selectable_items) do
     if p == path then
       return i
     end
@@ -689,7 +1085,7 @@ function M.get_display_idx_for_path(path)
   return nil
 end
 
----Setup keymaps for file tree buffer
+---Setup keymaps for file tree buffer (Fugitive-style)
 function M.setup_keymaps()
   local buf = state.state.layout.file_tree_buf
   if not buf or not vim.api.nvim_buf_is_valid(buf) then
@@ -698,49 +1094,123 @@ function M.setup_keymaps()
 
   local opts = { buffer = buf, nowait = true, silent = true }
 
-  -- Navigation
+  -- Navigation (j/k moves cursor through all lines including directories)
   vim.keymap.set("n", "j", function()
-    M.select_next()
+    M.cursor_down()
   end, opts)
   vim.keymap.set("n", "k", function()
-    M.select_prev()
+    M.cursor_up()
   end, opts)
   vim.keymap.set("n", "<Down>", function()
-    M.select_next()
+    M.cursor_down()
   end, opts)
   vim.keymap.set("n", "<Up>", function()
+    M.cursor_up()
+  end, opts)
+
+  -- File-only navigation with ( and ) like Fugitive
+  vim.keymap.set("n", ")", function()
+    M.select_next()
+  end, opts)
+  vim.keymap.set("n", "(", function()
     M.select_prev()
   end, opts)
 
-  -- Open file
+  -- Open file (like Fugitive: <CR>, o)
   vim.keymap.set("n", "<CR>", function()
-    M.open_at_cursor()
+    M.action_at_cursor()
   end, opts)
   vim.keymap.set("n", "o", function()
-    M.open_at_cursor()
-  end, opts)
-  vim.keymap.set("n", "l", function()
-    M.open_at_cursor()
+    M.action_at_cursor()
   end, opts)
 
-  -- Toggle reviewed / stage
+  -- Toggle expand/collapse with = (like Fugitive inline diff toggle)
+  vim.keymap.set("n", "=", function()
+    local item = M.get_item_at_cursor()
+    if item then
+      if item.type == "dir" then
+        M.toggle_directory(item.path)
+      elseif item.dir then
+        -- On file: toggle parent directory
+        M.toggle_directory(item.dir)
+      end
+    end
+  end, opts)
+
+  -- Collapse with h, expand with l (tree-style navigation)
+  vim.keymap.set("n", "h", function()
+    local item = M.get_item_at_cursor()
+    if item then
+      if item.type == "dir" then
+        if M.is_expanded(item.path) then
+          M.toggle_directory(item.path)
+        end
+      elseif item.dir then
+        if M.is_expanded(item.dir) then
+          M.toggle_directory(item.dir)
+        end
+      end
+    end
+  end, opts)
+  vim.keymap.set("n", "l", function()
+    local item = M.get_item_at_cursor()
+    if item then
+      if item.type == "dir" then
+        if not M.is_expanded(item.path) then
+          M.toggle_directory(item.path)
+        else
+          -- Already expanded, move to first file in dir
+          M.cursor_down()
+        end
+      else
+        M.open_selected()
+      end
+    end
+  end, opts)
+
+  -- Stage/unstage toggle with - (like Fugitive)
+  vim.keymap.set("n", "-", function()
+    M.toggle_reviewed_at_cursor()
+  end, opts)
+
+  -- Stage with s (like Fugitive)
+  vim.keymap.set("n", "s", function()
+    local file = M.get_file_at_cursor()
+    if file and not file.reviewed then
+      M.toggle_reviewed_at_cursor()
+    end
+  end, opts)
+
+  -- Unstage with u (like Fugitive)
+  vim.keymap.set("n", "u", function()
+    local file = M.get_file_at_cursor()
+    if file and file.reviewed then
+      M.toggle_reviewed_at_cursor()
+    end
+  end, opts)
+
+  -- Keep Space and x as aliases for toggle
   vim.keymap.set("n", "<Space>", function()
     M.toggle_reviewed_at_cursor()
   end, opts)
   vim.keymap.set("n", "x", function()
     M.toggle_reviewed_at_cursor()
   end, opts)
-  vim.keymap.set("n", "s", function()
-    M.toggle_reviewed_at_cursor()
+
+  -- Expand/collapse all (vim fold-style)
+  vim.keymap.set("n", "zM", function()
+    M.collapse_all()
+  end, opts)
+  vim.keymap.set("n", "zR", function()
+    M.expand_all()
   end, opts)
 
   -- Mouse click to open file
-  -- Use <LeftRelease> so cursor has already moved to click position
   vim.keymap.set("n", "<LeftRelease>", function()
-    M.open_at_cursor()
+    M.action_at_cursor()
   end, opts)
   vim.keymap.set("n", "<2-LeftMouse>", function()
-    M.open_at_cursor()
+    M.action_at_cursor()
   end, opts)
 
   -- Cross-file hunk navigation with Tab/S-Tab
@@ -748,7 +1218,6 @@ function M.setup_keymaps()
     local nav = require("review.core.navigation")
     nav.next_hunk_across_files()
   end, opts)
-
   vim.keymap.set("n", "<S-Tab>", function()
     local nav = require("review.core.navigation")
     nav.prev_hunk_across_files()
@@ -756,7 +1225,7 @@ function M.setup_keymaps()
 
   -- Refresh files from git
   vim.keymap.set("n", "R", function()
-    M.refresh_files()
+    require("review.commands").refresh()
   end, opts)
 
   -- Filter (inline search within tree)
@@ -768,7 +1237,23 @@ function M.setup_keymaps()
   vim.keymap.set("n", "<Esc>", function()
     if filter_pattern and filter_pattern ~= "" then
       M.clear_filter()
+    elseif state.state.provenance_filter then
+      M.clear_provenance_filter()
     end
+  end, opts)
+
+  -- Provenance filters (only functional in hybrid mode)
+  vim.keymap.set("n", "gP", function()
+    M.set_provenance_filter("pushed")
+  end, opts)
+  vim.keymap.set("n", "gL", function()
+    M.set_provenance_filter("local")
+  end, opts)
+  vim.keymap.set("n", "gU", function()
+    M.set_provenance_filter("uncommitted")
+  end, opts)
+  vim.keymap.set("n", "gA", function()
+    M.clear_provenance_filter()
   end, opts)
 
   -- Close review
@@ -778,13 +1263,20 @@ function M.setup_keymaps()
   end, opts)
 end
 
+---Build selectable items from state files (for use without full render)
+---@private
 ---Reset file tree state
 function M.reset()
   selected_idx = 1
-  line_to_display_idx = {}
-  sorted_paths = {}
+  line_to_item = {}
+  selectable_items = {}
+  expanded_dirs = {}
   header_lines_count = 0
   filter_pattern = nil
+  -- Note: provenance_filter is stored in state.state, not here
+
+  -- Rebuild selectable items from current state files
+  build_selectable_items()
 end
 
 ---Get current filter
@@ -804,6 +1296,36 @@ end
 ---Clear filter
 function M.clear_filter()
   M.set_filter(nil)
+end
+
+---Set provenance filter
+---@param provenance Review.Provenance?
+function M.set_provenance_filter(provenance)
+  if state.state.mode ~= "hybrid" then
+    vim.notify("Provenance filters only available in hybrid mode", vim.log.levels.WARN)
+    return
+  end
+  state.set_provenance_filter(provenance)
+  selected_idx = 1 -- Reset selection when filter changes
+  M.render()
+
+  local prov_names = {
+    pushed = "pushed",
+    ["local"] = "local",
+    uncommitted = "uncommitted",
+    both = "both",
+  }
+  vim.notify(string.format("Showing %s files", prov_names[provenance] or "all"), vim.log.levels.INFO)
+end
+
+---Clear provenance filter
+function M.clear_provenance_filter()
+  if state.state.provenance_filter then
+    state.set_provenance_filter(nil)
+    selected_idx = 1
+    M.render()
+    vim.notify("Showing all files", vim.log.levels.INFO)
+  end
 end
 
 ---Start interactive filter mode within the file tree
@@ -930,9 +1452,10 @@ function M.filter_input()
 end
 
 ---Refresh files from git and re-render
+---Lightweight refresh: re-diff and re-render without fetching or notifications
+---Used by auto-refresh on BufEnter
 function M.refresh_files()
-  if state.state.mode ~= "local" then
-    -- For PR mode, just re-render (would need GitHub API call to refresh)
+  if state.state.mode == "pr" then
     M.render()
     return
   end
@@ -942,13 +1465,10 @@ function M.refresh_files()
 
   local base = state.state.base or "HEAD"
 
-  -- Get diff for tracked changes
   local diff_output = git.diff(base)
-
-  -- Parse diff
   local files = diff_parser.parse(diff_output or "")
 
-  -- Also include untracked files as "added"
+  -- Include untracked files
   local untracked = git.get_untracked_files()
   local seen = {}
   for _, f in ipairs(files) do
@@ -968,7 +1488,7 @@ function M.refresh_files()
     end
   end
 
-  -- Preserve reviewed status from old files
+  -- Preserve reviewed status
   local old_reviewed = {}
   for _, f in ipairs(state.state.files) do
     old_reviewed[f.path] = f.reviewed
@@ -979,13 +1499,13 @@ function M.refresh_files()
     end
   end
 
-  -- Update state
+  -- Recompute provenance for hybrid mode
+  if state.state.mode == "hybrid" and state.state.origin_head then
+    git.compute_provenance(files, state.state.base, state.state.origin_head)
+  end
+
   state.set_files(files)
-
-  -- Re-render
   M.render()
-
-  vim.notify(string.format("Refreshed: %d files", #files), vim.log.levels.INFO)
 end
 
 ---Initialize file tree (called after layout.open)
@@ -993,6 +1513,24 @@ function M.init()
   M.reset()
   M.setup_keymaps()
   M.render()
+  M.setup_auto_refresh()
+end
+
+---Setup auto-refresh on entering file tree
+function M.setup_auto_refresh()
+  local buf = state.state.layout.file_tree_buf
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+
+  vim.api.nvim_create_autocmd("BufEnter", {
+    buffer = buf,
+    callback = function()
+      if state.is_active() then
+        M.refresh_files()
+      end
+    end,
+  })
 end
 
 return M

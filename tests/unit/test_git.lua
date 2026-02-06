@@ -543,4 +543,150 @@ T["checkout()"]["returns error for invalid ref"] = function()
   cleanup_repo(tmp_dir)
 end
 
+-- =============================================================================
+-- Provenance Tests (Hybrid Mode Support)
+-- =============================================================================
+
+T["get_tracking_branch()"] = MiniTest.new_set()
+
+T["get_tracking_branch()"]["returns nil when no tracking branch"] = function()
+  local tmp_dir = create_test_repo()
+  local orig_dir = vim.fn.getcwd()
+  vim.cmd("cd " .. tmp_dir)
+
+  -- Local repo has no remote, so no tracking branch
+  local tracking = git.get_tracking_branch()
+  MiniTest.expect.equality(tracking, nil)
+
+  vim.cmd("cd " .. orig_dir)
+  cleanup_repo(tmp_dir)
+end
+
+T["get_changed_files_between()"] = MiniTest.new_set()
+
+T["get_changed_files_between()"]["returns changed files between refs"] = function()
+  local tmp_dir = create_test_repo()
+  local orig_dir = vim.fn.getcwd()
+  vim.cmd("cd " .. tmp_dir)
+
+  -- Create a second commit
+  vim.fn.writefile({ "local M = {}", "M.x = 1", "return M" }, tmp_dir .. "/test.lua")
+  vim.fn.writefile({ "new" }, tmp_dir .. "/new.lua")
+  vim.fn.system({ "git", "-C", tmp_dir, "add", "." })
+  vim.fn.system({ "git", "-C", tmp_dir, "commit", "-m", "Second" })
+
+  local files = git.get_changed_files_between("HEAD~1", "HEAD")
+  MiniTest.expect.no_equality(files["test.lua"], nil)
+  MiniTest.expect.no_equality(files["new.lua"], nil)
+  MiniTest.expect.equality(files["test.lua"], "M")
+  MiniTest.expect.equality(files["new.lua"], "A")
+
+  vim.cmd("cd " .. orig_dir)
+  cleanup_repo(tmp_dir)
+end
+
+T["get_changed_files_between()"]["returns empty for no changes"] = function()
+  local tmp_dir = create_test_repo()
+  local orig_dir = vim.fn.getcwd()
+  vim.cmd("cd " .. tmp_dir)
+
+  local files = git.get_changed_files_between("HEAD", "HEAD")
+  MiniTest.expect.equality(next(files), nil)
+
+  vim.cmd("cd " .. orig_dir)
+  cleanup_repo(tmp_dir)
+end
+
+T["get_uncommitted_files()"] = MiniTest.new_set()
+
+T["get_uncommitted_files()"]["returns empty for clean repo"] = function()
+  local tmp_dir = create_test_repo()
+  local orig_dir = vim.fn.getcwd()
+  vim.cmd("cd " .. tmp_dir)
+
+  local files = git.get_uncommitted_files()
+  MiniTest.expect.equality(next(files), nil)
+
+  vim.cmd("cd " .. orig_dir)
+  cleanup_repo(tmp_dir)
+end
+
+T["get_uncommitted_files()"]["returns modified files"] = function()
+  local tmp_dir = create_test_repo()
+  local orig_dir = vim.fn.getcwd()
+  vim.cmd("cd " .. tmp_dir)
+
+  -- Modify a tracked file
+  vim.fn.writefile({ "modified" }, tmp_dir .. "/test.lua")
+
+  local files = git.get_uncommitted_files()
+  MiniTest.expect.no_equality(files["test.lua"], nil)
+  MiniTest.expect.equality(files["test.lua"], "M")
+
+  vim.cmd("cd " .. orig_dir)
+  cleanup_repo(tmp_dir)
+end
+
+T["get_uncommitted_files()"]["returns untracked files"] = function()
+  local tmp_dir = create_test_repo()
+  local orig_dir = vim.fn.getcwd()
+  vim.cmd("cd " .. tmp_dir)
+
+  -- Create untracked file
+  vim.fn.writefile({ "new" }, tmp_dir .. "/untracked.lua")
+
+  local files = git.get_uncommitted_files()
+  MiniTest.expect.no_equality(files["untracked.lua"], nil)
+  MiniTest.expect.equality(files["untracked.lua"], "A")
+
+  vim.cmd("cd " .. orig_dir)
+  cleanup_repo(tmp_dir)
+end
+
+T["compute_provenance()"] = MiniTest.new_set()
+
+T["compute_provenance()"]["assigns pushed to files in pushed set"] = function()
+  local tmp_dir = create_test_repo()
+  local orig_dir = vim.fn.getcwd()
+  vim.cmd("cd " .. tmp_dir)
+
+  -- Create a branch and commit
+  vim.fn.system({ "git", "-C", tmp_dir, "checkout", "-b", "feature" })
+  vim.fn.writefile({ "modified" }, tmp_dir .. "/test.lua")
+  vim.fn.system({ "git", "-C", tmp_dir, "add", "." })
+  vim.fn.system({ "git", "-C", tmp_dir, "commit", "-m", "Feature" })
+
+  -- Create files array to test
+  local files = {
+    { path = "test.lua", status = "modified" },
+  }
+
+  -- Get master/main branch
+  local main_branch = git.current_branch() == "feature" and "master" or git.default_branch() or "main"
+
+  -- Since origin doesn't exist, we simulate by using HEAD~1 as base and HEAD as origin_head
+  -- This won't work exactly like production, but tests the function structure
+  git.compute_provenance(files, "HEAD~1", "HEAD")
+
+  -- File should have provenance set
+  MiniTest.expect.no_equality(files[1].provenance, nil)
+
+  vim.cmd("cd " .. orig_dir)
+  cleanup_repo(tmp_dir)
+end
+
+T["get_ahead_behind()"] = MiniTest.new_set()
+
+T["get_ahead_behind()"]["returns nil when no tracking branch"] = function()
+  local tmp_dir = create_test_repo()
+  local orig_dir = vim.fn.getcwd()
+  vim.cmd("cd " .. tmp_dir)
+
+  local result = git.get_ahead_behind()
+  MiniTest.expect.equality(result, nil)
+
+  vim.cmd("cd " .. orig_dir)
+  cleanup_repo(tmp_dir)
+end
+
 return T

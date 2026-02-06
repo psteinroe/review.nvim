@@ -19,6 +19,8 @@ local M = {}
 
 ---@class Review.GithubConfig
 ---@field enabled boolean Whether GitHub integration is enabled
+---@field picker_default "review_requests" | "open_prs" | "my_prs" Default picker mode
+---@field picker_show_menu boolean Whether to show picker menu or go directly to default
 
 ---@class Review.AIConfig
 ---@field provider "auto" | "opencode" | "claude" | "codex" | "custom" AI provider
@@ -61,12 +63,14 @@ M.defaults = {
 
   -- Signs
   signs = {
-    comment_github = "G",
-    comment_local = "L",
+    comment_pending = "●",      -- Yellow: local pending
+    comment_submitted = "○",    -- Green: your submitted comment
+    comment_github = "◇",       -- Blue: others' GitHub comments
+    comment_resolved = "◆",     -- Gray: resolved thread
+    -- Legacy/type-specific (used in virtual text)
     comment_issue = "!",
     comment_suggestion = "*",
     comment_praise = "+",
-    comment_resolved = "R",
     comment_ai_processing = "●",
   },
 
@@ -78,6 +82,10 @@ M.defaults = {
   -- GitHub settings
   github = {
     enabled = true,
+    -- Default picker mode: "review_requests", "open_prs", "my_prs"
+    picker_default = "review_requests",
+    -- Show picker menu (false = go directly to default mode)
+    picker_show_menu = false,
   },
 
   -- AI settings

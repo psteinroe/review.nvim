@@ -438,13 +438,14 @@ T["show_comment()"]["creates a floating window"] = function()
   MiniTest.expect.equality(vim.api.nvim_buf_is_valid(buf), true)
 end
 
-T["show_comment()"]["does not enter the window"] = function()
+T["show_comment()"]["enters the floating window for keymaps"] = function()
   local current_win = vim.api.nvim_get_current_win()
   local comment = make_comment()
   local win, _ = float.show_comment(comment)
 
   MiniTest.expect.no_equality(win, current_win)
-  MiniTest.expect.equality(vim.api.nvim_get_current_win(), current_win)
+  -- Window is entered so that keymaps (q, e, d, r, R, etc.) work
+  MiniTest.expect.equality(vim.api.nvim_get_current_win(), win)
 end
 
 T["show_comment()"]["sets filetype to markdown"] = function()

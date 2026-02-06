@@ -18,10 +18,11 @@ function M.debounce(fn, ms)
 end
 
 ---Get relative time string from ISO timestamp
----@param iso_time string ISO 8601 timestamp
+---@param iso_time string|nil ISO 8601 timestamp
 ---@return string Relative time (e.g., "2 hours ago", "yesterday")
 function M.relative_time(iso_time)
-  if not iso_time or iso_time == "" then
+  -- Handle nil, empty, or non-string values (e.g., vim.NIL from JSON)
+  if not iso_time or type(iso_time) ~= "string" or iso_time == "" then
     return "unknown"
   end
 
@@ -70,7 +71,8 @@ end
 ---@param max_len number Maximum length
 ---@return string Truncated string
 function M.truncate(str, max_len)
-  if not str then
+  -- Handle nil, vim.NIL (userdata), and non-string values
+  if not str or type(str) ~= "string" then
     return ""
   end
   str = str:gsub("\n", " ") -- Replace newlines with spaces

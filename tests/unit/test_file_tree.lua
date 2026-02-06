@@ -1,4 +1,4 @@
--- Tests for review.ui.file_tree module (flat list implementation)
+-- Tests for review.ui.file_tree module (directory-grouped implementation)
 local T = MiniTest.new_set()
 
 local file_tree = require("review.ui.file_tree")
@@ -152,7 +152,7 @@ T["render_header()"]["shows Local mode header"] = function()
   state.state.base = "HEAD"
   state.state.files = create_test_files()
   local lines, _ = file_tree.render_header()
-  MiniTest.expect.equality(lines[1], "Local • HEAD")
+  MiniTest.expect.equality(lines[1], "Local • HEAD (4 files)")
 end
 
 T["render_header()"]["shows PR mode header with PR number"] = function()
@@ -160,7 +160,7 @@ T["render_header()"]["shows PR mode header with PR number"] = function()
   state.state.pr = { number = 123, title = "Test PR", base = "main", branch = "feat/test" }
   state.state.files = create_test_files()
   local lines, _ = file_tree.render_header()
-  MiniTest.expect.equality(lines[1], "PR #123")
+  MiniTest.expect.equality(lines[1], "PR #123 (4 files)")
 end
 
 T["render_header()"]["shows branch info for PR mode"] = function()
@@ -176,7 +176,7 @@ T["render_header()"]["shows review progress"] = function()
   state.state.files = create_test_files()
   local lines, _ = file_tree.render_header()
   -- 1 file is reviewed, 4 total
-  MiniTest.expect.equality(lines[2], "1 of 4 reviewed")
+  MiniTest.expect.equality(lines[2], "1/4 reviewed")
 end
 
 T["render_header()"]["includes blank line separator"] = function()
@@ -290,10 +290,11 @@ T["render_file_line()"]["includes status letter"] = function()
   MiniTest.expect.equality(line:match("A") ~= nil, true)
 end
 
-T["render_file_line()"]["includes file path"] = function()
+T["render_file_line()"]["includes filename only (directory is in header)"] = function()
   local file = { path = "src/test.lua", status = "modified", reviewed = false }
   local line, _ = file_tree.render_file_line(file, 1, 50)
-  MiniTest.expect.equality(line:match("src/test.lua") ~= nil, true)
+  -- Now shows only filename, directory is shown in header
+  MiniTest.expect.equality(line:match("test.lua") ~= nil, true)
 end
 
 T["render_file_line()"]["includes comment count"] = function()
@@ -371,7 +372,8 @@ T["selection"]["get_selected_file returns correct file"] = function()
   file_tree.set_selected_idx(2)
   local file = file_tree.get_selected_file()
   MiniTest.expect.no_equality(file, nil)
-  MiniTest.expect.equality(file.path, "src/utils.lua")
+  -- With directory grouping: (root)/README.md=1, src/main.lua=2
+  MiniTest.expect.equality(file.path, "src/main.lua")
 end
 
 T["selection"]["get_selected_file returns nil for empty files"] = function()
@@ -402,7 +404,8 @@ T["select_by_path()"] = MiniTest.new_set({
 T["select_by_path()"]["selects file by path"] = function()
   local success = file_tree.select_by_path("tests/test_main.lua")
   MiniTest.expect.equality(success, true)
-  MiniTest.expect.equality(file_tree.get_selected_idx(), 3)
+  -- With directory grouping: (root)/README.md=1, src/main.lua=2, src/utils.lua=3, tests/test_main.lua=4
+  MiniTest.expect.equality(file_tree.get_selected_idx(), 4)
 end
 
 T["select_by_path()"]["returns false for non-existent path"] = function()
@@ -473,11 +476,12 @@ T["render()"]["includes file names"] = function()
   MiniTest.expect.equality(content:match("utils.lua") ~= nil, true)
 end
 
-T["render()"]["includes directory paths"] = function()
+T["render()"]["includes directory headers"] = function()
   file_tree.render()
   local buf = state.state.layout.file_tree_buf
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local content = table.concat(lines, "\n")
+  -- Directory headers now show directories with trailing slash
   MiniTest.expect.equality(content:match("src/") ~= nil, true)
   MiniTest.expect.equality(content:match("tests/") ~= nil, true)
 end
@@ -613,9 +617,10 @@ T["open_selected()"] = MiniTest.new_set({
 })
 
 T["open_selected()"]["sets current_file in state"] = function()
+  -- With directory grouping: (root)/README.md=1, src/main.lua=2
   file_tree.set_selected_idx(2)
   file_tree.open_selected()
-  MiniTest.expect.equality(state.state.current_file, "src/utils.lua")
+  MiniTest.expect.equality(state.state.current_file, "src/main.lua")
 end
 
 T["open_selected()"]["returns true on success"] = function()
@@ -638,7 +643,8 @@ T["open_selected()"]["calls on_file_select callback if configured"] = function()
       end,
     },
   })
-  file_tree.set_selected_idx(1)
+  -- With directory grouping: (root)/README.md=1, src/main.lua=2
+  file_tree.set_selected_idx(2)
   file_tree.open_selected()
   MiniTest.expect.no_equality(called_with, nil)
   MiniTest.expect.equality(called_with.path, "src/main.lua")
@@ -685,6 +691,128 @@ T["toggle_reviewed()"]["returns nil when no file selected"] = function()
   state.state.files = {}
   local result = file_tree.toggle_reviewed()
   MiniTest.expect.equality(result, nil)
+end
+
+-- ============================================================================
+-- Directory grouping tests
+-- ============================================================================
+
+T["split_path()"] = MiniTest.new_set()
+
+T["split_path()"]["splits path into directory and filename"] = function()
+  local dir, filename = file_tree.split_path("src/components/Button.tsx")
+  MiniTest.expect.equality(dir, "src/components")
+  MiniTest.expect.equality(filename, "Button.tsx")
+end
+
+T["split_path()"]["handles root-level files"] = function()
+  local dir, filename = file_tree.split_path("README.md")
+  MiniTest.expect.equality(dir, "")
+  MiniTest.expect.equality(filename, "README.md")
+end
+
+T["split_path()"]["handles single-level paths"] = function()
+  local dir, filename = file_tree.split_path("src/file.lua")
+  MiniTest.expect.equality(dir, "src")
+  MiniTest.expect.equality(filename, "file.lua")
+end
+
+T["group_files_by_directory()"] = MiniTest.new_set()
+
+T["group_files_by_directory()"]["groups files correctly"] = function()
+  local files = {
+    { path = "src/a.lua" },
+    { path = "src/b.lua" },
+    { path = "tests/test.lua" },
+    { path = "README.md" },
+  }
+  local groups, dirs = file_tree.group_files_by_directory(files)
+
+  MiniTest.expect.equality(#dirs, 3) -- "", "src", "tests"
+  MiniTest.expect.equality(#groups[""], 1) -- README.md
+  MiniTest.expect.equality(#groups["src"], 2) -- a.lua, b.lua
+  MiniTest.expect.equality(#groups["tests"], 1) -- test.lua
+end
+
+T["group_files_by_directory()"]["sorts directories alphabetically"] = function()
+  local files = {
+    { path = "zebra/z.lua" },
+    { path = "alpha/a.lua" },
+    { path = "README.md" },
+  }
+  local _, dirs = file_tree.group_files_by_directory(files)
+
+  MiniTest.expect.equality(dirs[1], "") -- root first
+  MiniTest.expect.equality(dirs[2], "alpha")
+  MiniTest.expect.equality(dirs[3], "zebra")
+end
+
+T["directory expansion"] = MiniTest.new_set({
+  hooks = {
+    pre_case = function()
+      config.setup()
+      state.reset()
+      state.state.files = create_test_files()
+      file_tree.reset()
+    end,
+    post_case = function()
+      state.reset()
+      file_tree.reset()
+    end,
+  },
+})
+
+T["directory expansion"]["directories default to expanded"] = function()
+  MiniTest.expect.equality(file_tree.is_expanded("src"), true)
+  MiniTest.expect.equality(file_tree.is_expanded("tests"), true)
+  MiniTest.expect.equality(file_tree.is_expanded("nonexistent"), true)
+end
+
+T["directory expansion"]["toggle_directory collapses expanded dir"] = function()
+  file_tree.toggle_directory("src")
+  MiniTest.expect.equality(file_tree.is_expanded("src"), false)
+end
+
+T["directory expansion"]["toggle_directory expands collapsed dir"] = function()
+  file_tree.toggle_directory("src")
+  MiniTest.expect.equality(file_tree.is_expanded("src"), false)
+  file_tree.toggle_directory("src")
+  MiniTest.expect.equality(file_tree.is_expanded("src"), true)
+end
+
+T["directory expansion"]["collapse_all collapses all directories"] = function()
+  file_tree.collapse_all()
+  MiniTest.expect.equality(file_tree.is_expanded(""), false)
+  MiniTest.expect.equality(file_tree.is_expanded("src"), false)
+  MiniTest.expect.equality(file_tree.is_expanded("tests"), false)
+end
+
+T["directory expansion"]["expand_all expands all directories"] = function()
+  file_tree.collapse_all()
+  file_tree.expand_all()
+  MiniTest.expect.equality(file_tree.is_expanded(""), true)
+  MiniTest.expect.equality(file_tree.is_expanded("src"), true)
+  MiniTest.expect.equality(file_tree.is_expanded("tests"), true)
+end
+
+T["directory expansion"]["collapsed dir hides files from selectable items"] = function()
+  -- All expanded: 4 files selectable
+  MiniTest.expect.equality(#file_tree.get_sorted_paths(), 4)
+
+  -- Collapse src: should hide 2 files
+  file_tree.toggle_directory("src")
+  MiniTest.expect.equality(#file_tree.get_sorted_paths(), 2)
+end
+
+T["directory expansion"]["select_by_path auto-expands collapsed dir"] = function()
+  file_tree.toggle_directory("src")
+  MiniTest.expect.equality(file_tree.is_expanded("src"), false)
+
+  -- Select a file in collapsed dir
+  file_tree.select_by_path("src/main.lua")
+
+  -- Should auto-expand
+  MiniTest.expect.equality(file_tree.is_expanded("src"), true)
 end
 
 return T
