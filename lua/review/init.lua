@@ -80,8 +80,8 @@ end
 -- Public API
 -- =============================================================================
 
----Open local diff review against a base ref
----@param base? string Base ref to diff against (default: HEAD)
+---Open review - auto-detects PR branch for hybrid mode, else local mode
+---@param base? string Base ref to diff against (default: auto-detect or HEAD)
 function M.open(base)
   if not is_setup then
     vim.notify("review.nvim not set up. Call require('review').setup() first.", vim.log.levels.ERROR)
@@ -89,6 +89,19 @@ function M.open(base)
   end
 
   local commands = require("review.commands")
+
+  -- If no explicit base provided, check for PR and use hybrid mode
+  if not base then
+    local github = require("review.integrations.github")
+    if github.is_available() then
+      local pr_number = github.get_current_pr_number()
+      if pr_number then
+        commands.open_hybrid(pr_number)
+        return
+      end
+    end
+  end
+
   commands.open_local(base)
 end
 
