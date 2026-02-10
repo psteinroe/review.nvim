@@ -19,6 +19,9 @@ local is_setup = false
 ---@field numhl? string Line number highlight group
 ---@field linehl? string Line highlight group
 
+-- Sign group for change markers (separate from comment signs)
+local CHANGE_SIGN_GROUP = "review_change_signs"
+
 ---Get sign definitions from config
 ---@return table<string, Review.SignDef>
 local function get_sign_definitions()
@@ -32,6 +35,10 @@ local function get_sign_definitions()
     -- AI status
     comment_ai_processing = { text = cfg.comment_ai_processing or "●", texthl = "ReviewSignAI" },
     comment_ai_complete = { text = "✓", texthl = "ReviewSignSubmitted" },
+    -- Change markers (shown when diff is hidden)
+    change_add = { text = "│", texthl = "ReviewSignAdd" },
+    change_modify = { text = "│", texthl = "ReviewSignChange" },
+    change_delete = { text = "_", texthl = "ReviewSignDelete" },
   }
 end
 
@@ -332,6 +339,81 @@ function M.prev_sign(buf, current_line, wrap)
   end
 
   return nil
+end
+
+---Clear all change signs in a buffer
+---@param buf number Buffer handle
+function M.clear_change_signs(buf)
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+  vim.fn.sign_unplace(CHANGE_SIGN_GROUP, { buffer = buf })
+end
+
+---Clear all change signs in all buffers
+function M.clear_all_change_signs()
+  vim.fn.sign_unplace(CHANGE_SIGN_GROUP)
+end
+
+---Place change signs for a file based on hunk data
+---@param buf number Buffer handle
+---@param file_path string File path to get hunks for
+function M.place_change_signs(buf, file_path)
+  if not vim.api.nvim_buf_is_valid(buf) then
+    return
+  end
+
+  -- Clear existing change signs first
+  M.clear_change_signs(buf)
+
+  -- Get file data with hunks
+  local file_data = state.find_file(file_path)
+  if not file_data or not file_data.hunks then
+    return
+  end
+
+  local line_count = vim.api.nvim_buf_line_count(buf)
+
+  -- Place signs based on hunk lines
+  for _, hunk in ipairs(file_data.hunks) do
+    if hunk.lines then
+      for _, line_info in ipairs(hunk.lines) do
+        local lnum = line_info.new_line
+        if lnum and lnum >= 1 and lnum <= line_count then
+          local sign_name
+          if line_info.type == "add" then
+            sign_name = "Review_change_add"
+          elseif line_info.type == "delete" then
+            -- Delete lines don't have new_line, skip or show at context
+            sign_name = nil
+          elseif line_info.type == "context" then
+            -- Context lines don't need signs
+            sign_name = nil
+          end
+
+          if sign_name then
+            pcall(vim.fn.sign_place, 0, CHANGE_SIGN_GROUP, sign_name, buf, {
+              lnum = lnum,
+              priority = 5, -- Lower than comment signs
+            })
+          end
+        end
+      end
+    else
+      -- Fallback: use hunk header info if no detailed line info
+      -- Mark all lines in the new range as changed
+      local start_line = hunk.new_start or 1
+      local count = hunk.new_count or 0
+      for lnum = start_line, start_line + count - 1 do
+        if lnum >= 1 and lnum <= line_count then
+          pcall(vim.fn.sign_place, 0, CHANGE_SIGN_GROUP, "Review_change_add", buf, {
+            lnum = lnum,
+            priority = 5,
+          })
+        end
+      end
+    end
+  end
 end
 
 return M

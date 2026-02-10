@@ -28,6 +28,11 @@ M.defaults = {
   ReviewSignAI = { fg = "#cba6f7" },         -- Purple: AI processing
   ReviewSignCommentable = { fg = "#585b70" },  -- Dim: commentable line indicator
 
+  -- Signs (gutter icons) - change markers (when diff is hidden)
+  ReviewSignAdd = { fg = "#a6e3a1" },        -- Green: added line
+  ReviewSignChange = { fg = "#89b4fa" },     -- Blue: changed line
+  ReviewSignDelete = { fg = "#f38ba8" },     -- Red: deleted line
+
   -- Virtual text (inline comment previews)
   ReviewVirtualPending = { fg = "#f9e2af", italic = true },   -- Yellow
   ReviewVirtualSubmitted = { fg = "#a6e3a1", italic = true }, -- Green

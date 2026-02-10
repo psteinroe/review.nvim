@@ -662,6 +662,14 @@ function M.hide_diff(silent)
   end
 
   diff_hidden = true
+
+  -- Place change signs to show which lines were modified
+  local file_path = state.state.current_file
+  if file_path and diff_buffers.new_buf and vim.api.nvim_buf_is_valid(diff_buffers.new_buf) then
+    local signs = require("review.ui.signs")
+    signs.place_change_signs(diff_buffers.new_buf, file_path)
+  end
+
   if not silent then
     vim.notify("Diff hidden (<leader>rD to toggle)", vim.log.levels.INFO)
   end
@@ -688,6 +696,12 @@ function M.show_diff()
   if not new_win or not vim.api.nvim_win_is_valid(new_win) then
     vim.notify("Working buffer not found", vim.log.levels.ERROR)
     return
+  end
+
+  -- Clear change signs (diff mode will show its own markers)
+  if diff_buffers.new_buf and vim.api.nvim_buf_is_valid(diff_buffers.new_buf) then
+    local signs = require("review.ui.signs")
+    signs.clear_change_signs(diff_buffers.new_buf)
   end
 
   -- Save cursor position from working buffer
